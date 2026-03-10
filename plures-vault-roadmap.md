@@ -39,9 +39,23 @@ Encrypted Blobs Sync (zero-knowledge)
 ## Tech Stack
 
 - **Backend**: PluresDB + Rust crypto + Hyperswarm
-- **Frontend**: Svelte + Tauri + design-dojo components
+- **Frontend**: Svelte + Tauri + **design-dojo components** (ecosystem consistency)
+- **Audit**: **Praxis ledger integration** (all actions logged and auditable)
 - **Extension**: Chrome/Edge WebExtension (design-dojo styled)
 - **Enterprise**: Azure Key Vault integration
+
+## Praxis Integration Architecture
+
+### Design System Consistency
+- **All UI components** built into or reused from design-dojo
+- **Unified design language** across Plures ecosystem (Vault, OASIS, Pares)
+- **Component reusability** for future Plures products
+
+### Auditability & Governance  
+- **All user actions** logged through Praxis ledger system
+- **Decision trail**: Why passwords were created/modified/shared
+- **Compliance reporting**: Enterprise audit logs via Praxis
+- **Pattern detection**: Security behavior analysis through Praxis patterns
 
 ## Development Phases
 
@@ -53,11 +67,13 @@ Encrypted Blobs Sync (zero-knowledge)
 - [x] **CLI interface scaffold** - ✅ Complete with all commands
 
 ### Phase 2: GUI + Sync (4-6 weeks)  
-- [ ] Svelte-Tauri desktop app using design-dojo components
-- [ ] Build required vault UI components in design-dojo first
-- [ ] Hyperswarm P2P sync protocol
-- [ ] Multi-device key derivation
-- [ ] Conflict resolution for concurrent edits
+- [ ] **Design-dojo component development** (build vault UI components into design-dojo or reuse existing)
+- [ ] **Praxis ledger integration** (all user actions auditable through Praxis logging system)
+- [ ] **Svelte-Tauri desktop app** using design-dojo components for ecosystem consistency
+- [ ] **Multi-partition management UI** (unified interface for local + enterprise partitions)
+- [ ] **Hyperswarm P2P sync protocol** for zero-trust encrypted blob distribution
+- [ ] **Multi-device key derivation** with secure device enrollment flow
+- [ ] **Conflict resolution** for concurrent edits with full audit trail
 
 ### Phase 3: Browser Integration (6-8 weeks)
 - [ ] Chrome/Edge extension
