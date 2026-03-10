@@ -1,0 +1,52 @@
+name: Security Audit
+description: Report a security vulnerability or request security review
+labels: ["security", "critical"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **⚠️ For security vulnerabilities, please email security@plures.ai instead of filing a public issue.**
+        
+        This template is for security audit requests and general security discussions.
+
+  - type: dropdown
+    id: type
+    attributes:
+      label: Security Issue Type
+      description: What type of security concern is this?
+      options:
+        - Security audit request
+        - Security feature request
+        - General security discussion
+        - Documentation security issue
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe your security concern or audit request
+      placeholder: Please provide details about the security aspect you'd like to discuss...
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Scope
+      description: Which parts of Plures Vault does this relate to?
+      placeholder: e.g., "crypto layer", "CLI interface", "P2P sync", "database storage"
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmation
+    attributes:
+      label: Confirmation
+      description: Please confirm the following
+      options:
+        - label: This is not a security vulnerability (those should be emailed to security@plures.ai)
+          required: true
+        - label: I have searched existing issues to avoid duplicates
+          required: true

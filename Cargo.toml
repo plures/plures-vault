@@ -1,0 +1,24 @@
+[package]
+name = "plures-vault"
+version = "0.1.0"
+edition = "2021"
+authors = ["Plures Team <dev@plures.ai>"]
+description = "Zero-trust P2P password manager"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/plures/plures-vault"
+
+[workspace]
+members = [
+    "crates/vault-core",
+    "crates/vault-crypto", 
+    "crates/vault-sync"
+]
+
+[dependencies]
+vault-core = { path = "crates/vault-core" }
+vault-crypto = { path = "crates/vault-crypto" }
+vault-sync = { path = "crates/vault-sync" }
+clap = { version = "4.0", features = ["derive"] }
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+serde = { version = "1.0", features = ["derive"] }

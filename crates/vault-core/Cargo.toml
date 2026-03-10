@@ -1,0 +1,19 @@
+[package]
+name = "vault-core"
+version = "0.1.0"
+edition = "2021"
+description = "Core vault operations and PluresDB integration"
+
+[dependencies]
+vault-crypto = { path = "../vault-crypto" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+anyhow = "1.0"
+thiserror = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+
+# PluresDB integration - will use SQLite for now, migrate to native PluresDB when available
+rusqlite = { version = "0.31", features = ["bundled"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "sqlite"] }
