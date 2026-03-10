@@ -60,8 +60,13 @@ Encrypted Sync to Your Devices
 
 ## Business Model
 
-- **Personal**: Free forever
-- **Enterprise**: $10/user/month for Azure Key Vault integration, team sharing, audit logging
+- **Personal**: 1 sync partition free forever
+- **Scale**: $10/month per additional sync partition (NOT per user!)
+
+**Why this is better:**
+- **Small teams**: Share 1 partition = $0/month (vs $10/user elsewhere)
+- **Enterprise**: Pay per logical boundary, not headcount
+- **Personal**: Add family partition for just $10/month total
 
 ## Security
 
