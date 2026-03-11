@@ -127,7 +127,7 @@ async fn add_credential(
     let credential_id = vault_manager.add_credential(
         credential_data.name,
         if credential_data.username.is_empty() { None } else { Some(credential_data.username) },
-        Some(credential_data.password),
+        credential_data.password,
         credential_data.url,
         credential_data.notes,
     ).await
