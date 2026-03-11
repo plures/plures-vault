@@ -11,7 +11,8 @@ repository = "https://github.com/plures/plures-vault"
 members = [
     "crates/vault-core",
     "crates/vault-crypto", 
-    "crates/vault-sync"
+    "crates/vault-sync",
+    "vault-gui/src-tauri"
 ]
 
 [dependencies]

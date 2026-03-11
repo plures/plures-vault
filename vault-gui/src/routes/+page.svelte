@@ -1,24 +1,117 @@
 <script lang="ts">
-	let isUnlocked = false;
+	import { onMount } from 'svelte';
+	import { vaultAPI, type CredentialData, type VaultStatus } from '$lib/api';
+	
+	let vaultStatus: VaultStatus | null = null;
+	let isLoading = false;
+	let errorMessage = '';
 	let currentPartition = 'personal';
 	let searchQuery = '';
 	let masterPassword = '';
+	let credentials: CredentialData[] = [];
+	let showAddDialog = false;
+	let newCredential: CredentialData = {
+		name: '',
+		username: '',
+		password: '',
+		url: '',
+		notes: ''
+	};
 	
-	// Mock data for development - will connect to Rust backend
+	// Mock partitions for demo - will be dynamic in Phase 3
 	let partitions = [
-		{ id: 'personal', name: 'Personal', type: 'local', passwordCount: 42 },
-		{ id: 'work', name: 'Work', type: 'azure-kv', passwordCount: 28 }
+		{ id: 'personal', name: 'Personal', type: 'local', passwordCount: 0 }
 	];
 	
-	let passwords = [
-		{ id: '1', title: 'GitHub', username: 'user@example.com', url: 'github.com', partition: 'personal' },
-		{ id: '2', title: 'Gmail', username: 'user@gmail.com', url: 'gmail.com', partition: 'personal' },
-		{ id: '3', title: 'Work Portal', username: 'employee', url: 'company.portal.com', partition: 'work' }
-	];
+	onMount(async () => {
+		await checkVaultStatus();
+	});
 	
-	function handleUnlock() {
-		if (masterPassword.trim()) {
-			isUnlocked = true;
+	async function checkVaultStatus() {
+		try {
+			isLoading = true;
+			vaultStatus = await vaultAPI.checkStatus();
+			if (vaultStatus.unlocked) {
+				await loadCredentials();
+			}
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Unknown error';
+		} finally {
+			isLoading = false;
+		}
+	}
+	
+	async function handleUnlock() {
+		if (!masterPassword.trim()) return;
+		
+		try {
+			isLoading = true;
+			errorMessage = '';
+			
+			if (!vaultStatus?.initialized) {
+				// Initialize new vault
+				await vaultAPI.initialize('My Vault', masterPassword);
+			} else {
+				// Unlock existing vault
+				await vaultAPI.unlock(masterPassword);
+			}
+			
+			await loadCredentials();
+			vaultStatus = { ...vaultStatus!, unlocked: true };
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Failed to unlock vault';
+		} finally {
+			isLoading = false;
+		}
+	}
+	
+	async function loadCredentials() {
+		try {
+			credentials = await vaultAPI.listCredentials();
+			// Update partition count
+			partitions[0].passwordCount = credentials.length;
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Failed to load credentials';
+		}
+	}
+	
+	async function handleAddCredential() {
+		if (!newCredential.name.trim() || !newCredential.username.trim()) return;
+		
+		try {
+			isLoading = true;
+			await vaultAPI.addCredential(newCredential);
+			await loadCredentials();
+			
+			// Reset form
+			newCredential = { name: '', username: '', password: '', url: '', notes: '' };
+			showAddDialog = false;
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Failed to add credential';
+		} finally {
+			isLoading = false;
+		}
+	}
+	
+	async function handleDeleteCredential(credentialId: string) {
+		if (!confirm('Are you sure you want to delete this credential?')) return;
+		
+		try {
+			isLoading = true;
+			await vaultAPI.deleteCredential(credentialId);
+			await loadCredentials();
+		} catch (error) {
+			errorMessage = error instanceof Error ? error.message : 'Failed to delete credential';
+		} finally {
+			isLoading = false;
+		}
+	}
+	
+	async function copyToClipboard(text: string) {
+		try {
+			await navigator.clipboard.writeText(text);
+		} catch (error) {
+			console.warn('Failed to copy to clipboard:', error);
 		}
 	}
 	
@@ -26,20 +119,32 @@
 		currentPartition = partition;
 	}
 	
-	$: filteredPasswords = passwords.filter(p => 
-		p.partition === currentPartition && 
-		(p.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
-		 p.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
-		 p.url.toLowerCase().includes(searchQuery.toLowerCase()))
+	$: filteredCredentials = credentials.filter(c => 
+		c.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
+		c.username.toLowerCase().includes(searchQuery.toLowerCase()) ||
+		(c.url && c.url.toLowerCase().includes(searchQuery.toLowerCase()))
 	);
 </script>
 
 <main class="vault-container">
-	{#if !isUnlocked}
+	{#if isLoading}
+		<div class="loading-screen">
+			<div class="spinner"></div>
+			<p>Loading...</p>
+		</div>
+	{:else if !vaultStatus?.unlocked}
 		<div class="unlock-screen">
 			<div class="unlock-dialog">
 				<h1>🔐 Plures Vault</h1>
-				<p>Enter your master password to unlock your vault</p>
+				{#if vaultStatus?.initialized}
+					<p>Enter your master password to unlock your vault</p>
+				{:else}
+					<p>Initialize your new vault with a master password</p>
+				{/if}
+				
+				{#if errorMessage}
+					<div class="error-message">{errorMessage}</div>
+				{/if}
 				
 				<input
 					bind:value={masterPassword}
@@ -49,8 +154,12 @@
 					on:keydown={(e) => e.key === 'Enter' && handleUnlock()}
 				/>
 				
-				<button class="unlock-btn" on:click={handleUnlock} disabled={!masterPassword.trim()}>
-					Unlock Vault
+				<button 
+					class="unlock-btn" 
+					on:click={handleUnlock} 
+					disabled={!masterPassword.trim()}
+				>
+					{vaultStatus?.initialized ? 'Unlock Vault' : 'Create Vault'}
 				</button>
 				
 				<p class="security-note">
@@ -63,6 +172,9 @@
 			<div class="sidebar-header">
 				<h1>Plures Vault</h1>
 				<p>Zero-Trust Password Manager</p>
+				{#if vaultStatus.vault_name}
+					<p class="vault-name">📁 {vaultStatus.vault_name}</p>
+				{/if}
 			</div>
 			
 			<div class="partitions">
@@ -75,11 +187,17 @@
 					>
 						<div>
 							<div class="partition-name">{partition.name}</div>
-							<div class="partition-type">{partition.type === 'azure-kv' ? '🔐 Azure KV' : '🏠 Local'}</div>
+							<div class="partition-type">🏠 Local</div>
 						</div>
 						<span class="count">{partition.passwordCount}</span>
 					</button>
 				{/each}
+			</div>
+			
+			<div class="sidebar-actions">
+				<button class="lock-btn" on:click={() => vaultAPI.lock().then(() => location.reload())}>
+					🔒 Lock Vault
+				</button>
 			</div>
 		</div>
 		
@@ -90,42 +208,105 @@
 					placeholder="Search passwords..."
 					class="search-input"
 				/>
-				<button class="add-btn">+ Add Password</button>
+				<button class="add-btn" on:click={() => showAddDialog = true}>
+					+ Add Password
+				</button>
 			</div>
 			
+			{#if errorMessage}
+				<div class="error-banner">{errorMessage}</div>
+			{/if}
+			
 			<div class="passwords-grid">
-				{#each filteredPasswords as password}
+				{#each filteredCredentials as credential}
 					<div class="password-card">
 						<div class="card-header">
-							<h3>{password.title}</h3>
+							<h3>{credential.name}</h3>
 							<div class="actions">
-								<button>📋</button>
-								<button>✏️</button>
-								<button>🗑️</button>
+								<button on:click={() => copyToClipboard(credential.username)} title="Copy username">
+									👤
+								</button>
+								<button on:click={() => copyToClipboard(credential.password)} title="Copy password">
+									🔑
+								</button>
+								<button on:click={() => handleDeleteCredential(credential.id!)} title="Delete">
+									🗑️
+								</button>
 							</div>
 						</div>
 						<div class="card-body">
 							<div class="field">
 								<label>Username:</label>
-								<span>{password.username}</span>
+								<span>{credential.username}</span>
 							</div>
 							<div class="field">
 								<label>Password:</label>
 								<span>••••••••••••</span>
 							</div>
-							<div class="field">
-								<label>URL:</label>
-								<a href={`https://${password.url}`} target="_blank">{password.url}</a>
-							</div>
+							{#if credential.url}
+								<div class="field">
+									<label>URL:</label>
+									<a href={credential.url.startsWith('http') ? credential.url : `https://${credential.url}`} 
+									   target="_blank" rel="noopener">
+										{credential.url}
+									</a>
+								</div>
+							{/if}
 						</div>
 					</div>
 				{:else}
 					<div class="empty-state">
 						<h3>No passwords found</h3>
 						<p>Add your first password to get started</p>
-						<button class="add-btn">Add Password</button>
+						<button class="add-btn" on:click={() => showAddDialog = true}>
+							Add Password
+						</button>
 					</div>
 				{/each}
+			</div>
+		</div>
+	{/if}
+	
+	<!-- Add Credential Dialog -->
+	{#if showAddDialog}
+		<div class="modal-backdrop" on:click={() => showAddDialog = false}>
+			<div class="modal-content" on:click|stopPropagation>
+				<div class="modal-header">
+					<h3>Add New Credential</h3>
+					<button class="close-btn" on:click={() => showAddDialog = false}>×</button>
+				</div>
+				<div class="modal-body">
+					<div class="form-group">
+						<label for="name">Name *</label>
+						<input id="name" bind:value={newCredential.name} placeholder="e.g. GitHub" />
+					</div>
+					<div class="form-group">
+						<label for="username">Username *</label>
+						<input id="username" bind:value={newCredential.username} placeholder="username or email" />
+					</div>
+					<div class="form-group">
+						<label for="password">Password *</label>
+						<input id="password" type="password" bind:value={newCredential.password} placeholder="password" />
+					</div>
+					<div class="form-group">
+						<label for="url">URL</label>
+						<input id="url" bind:value={newCredential.url} placeholder="https://example.com" />
+					</div>
+					<div class="form-group">
+						<label for="notes">Notes</label>
+						<textarea id="notes" bind:value={newCredential.notes} placeholder="Optional notes"></textarea>
+					</div>
+				</div>
+				<div class="modal-footer">
+					<button class="cancel-btn" on:click={() => showAddDialog = false}>Cancel</button>
+					<button 
+						class="save-btn" 
+						on:click={handleAddCredential}
+						disabled={!newCredential.name.trim() || !newCredential.username.trim()}
+					>
+						Add Credential
+					</button>
+				</div>
 			</div>
 		</div>
 	{/if}
@@ -385,5 +566,214 @@
 	
 	.empty-state p {
 		margin: 0 0 1rem 0;
+	}
+	
+	/* Loading and Error States */
+	.loading-screen {
+		grid-column: 1 / -1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		background: #0a0a0a;
+		gap: 1rem;
+	}
+	
+	.spinner {
+		width: 40px;
+		height: 40px;
+		border: 3px solid #333;
+		border-top: 3px solid #3b82f6;
+		border-radius: 50%;
+		animation: spin 1s linear infinite;
+	}
+	
+	@keyframes spin {
+		0% { transform: rotate(0deg); }
+		100% { transform: rotate(360deg); }
+	}
+	
+	.error-message {
+		background: #dc2626;
+		color: white;
+		padding: 0.75rem;
+		border-radius: 6px;
+		margin: 1rem 0;
+		font-size: 0.9rem;
+	}
+	
+	.error-banner {
+		background: #dc2626;
+		color: white;
+		padding: 0.75rem;
+		border-radius: 6px;
+		margin-bottom: 1rem;
+	}
+	
+	/* Vault Name Display */
+	.vault-name {
+		font-size: 0.8rem;
+		color: #888;
+		margin-top: 0.5rem;
+	}
+	
+	/* Sidebar Actions */
+	.sidebar-actions {
+		margin-top: auto;
+		padding-top: 2rem;
+	}
+	
+	.lock-btn {
+		width: 100%;
+		padding: 0.75rem;
+		background: #dc2626;
+		color: white;
+		border: none;
+		border-radius: 6px;
+		cursor: pointer;
+		font-weight: 600;
+		transition: background-color 0.2s;
+	}
+	
+	.lock-btn:hover {
+		background: #b91c1c;
+	}
+	
+	/* Modal Styles */
+	.modal-backdrop {
+		position: fixed;
+		top: 0;
+		left: 0;
+		width: 100vw;
+		height: 100vh;
+		background: rgba(0, 0, 0, 0.7);
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		z-index: 1000;
+	}
+	
+	.modal-content {
+		background: #1a1a1a;
+		border: 1px solid #333;
+		border-radius: 12px;
+		min-width: 500px;
+		max-width: 90vw;
+		max-height: 90vh;
+		overflow-y: auto;
+	}
+	
+	.modal-header {
+		display: flex;
+		justify-content: space-between;
+		align-items: center;
+		padding: 1.5rem 1.5rem 0 1.5rem;
+	}
+	
+	.modal-header h3 {
+		margin: 0;
+		font-size: 1.2rem;
+	}
+	
+	.close-btn {
+		background: transparent;
+		border: none;
+		color: #888;
+		font-size: 1.5rem;
+		cursor: pointer;
+		padding: 0;
+		width: 30px;
+		height: 30px;
+		display: flex;
+		align-items: center;
+		justify-content: center;
+		border-radius: 4px;
+		transition: color 0.2s;
+	}
+	
+	.close-btn:hover {
+		color: white;
+	}
+	
+	.modal-body {
+		padding: 1.5rem;
+	}
+	
+	.form-group {
+		margin-bottom: 1rem;
+	}
+	
+	.form-group label {
+		display: block;
+		margin-bottom: 0.5rem;
+		font-size: 0.9rem;
+		color: #ccc;
+		font-weight: 600;
+	}
+	
+	.form-group input,
+	.form-group textarea {
+		width: 100%;
+		padding: 0.75rem;
+		background: #2a2a2a;
+		border: 1px solid #444;
+		border-radius: 6px;
+		color: white;
+		font-size: 0.9rem;
+		box-sizing: border-box;
+	}
+	
+	.form-group textarea {
+		resize: vertical;
+		min-height: 80px;
+	}
+	
+	.form-group input:focus,
+	.form-group textarea:focus {
+		outline: none;
+		border-color: #3b82f6;
+		box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.2);
+	}
+	
+	.modal-footer {
+		padding: 0 1.5rem 1.5rem 1.5rem;
+		display: flex;
+		gap: 1rem;
+		justify-content: flex-end;
+	}
+	
+	.cancel-btn {
+		padding: 0.75rem 1.5rem;
+		background: transparent;
+		border: 1px solid #555;
+		color: white;
+		border-radius: 6px;
+		cursor: pointer;
+		font-weight: 600;
+		transition: background-color 0.2s;
+	}
+	
+	.cancel-btn:hover {
+		background: #2a2a2a;
+	}
+	
+	.save-btn {
+		padding: 0.75rem 1.5rem;
+		background: #10b981;
+		color: white;
+		border: none;
+		border-radius: 6px;
+		cursor: pointer;
+		font-weight: 600;
+		transition: background-color 0.2s;
+	}
+	
+	.save-btn:hover:not(:disabled) {
+		background: #059669;
+	}
+	
+	.save-btn:disabled {
+		background: #555;
+		cursor: not-allowed;
 	}
 </style>

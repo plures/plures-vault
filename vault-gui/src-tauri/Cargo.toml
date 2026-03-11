@@ -1,5 +1,5 @@
 [package]
-name = "plures-vault"
+name = "plures-vault-gui"
 version = "0.1.0"
 description = "Zero-trust P2P password manager with Hyperswarm sync"
 authors = ["Plures Team"]
@@ -17,6 +17,8 @@ tauri = { version = "1.5", features = ["api-all"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 # Add our vault core dependencies
 vault-core = { path = "../../crates/vault-core" }
