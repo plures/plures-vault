@@ -1,4 +1,4 @@
-use tauri::{Manager, State};
+use tauri::{AppHandle, Manager, State};
 use vault_core::{VaultManager, Credential};
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
@@ -28,6 +28,7 @@ pub struct VaultStatus {
 
 #[tauri::command]
 async fn check_vault_status(
+    _app: AppHandle,
     state: State<'_, AppState>,
     database_path: String,
 ) -> Result<VaultStatus, String> {
@@ -52,6 +53,7 @@ async fn check_vault_status(
 
 #[tauri::command]
 async fn initialize_vault(
+    _app: AppHandle,
     state: State<'_, AppState>,
     database_path: String,
     vault_name: String,
@@ -71,6 +73,7 @@ async fn initialize_vault(
 
 #[tauri::command]
 async fn unlock_vault(
+    _app: AppHandle,
     state: State<'_, AppState>,
     database_path: String,
     master_password: String,
@@ -88,7 +91,7 @@ async fn unlock_vault(
 }
 
 #[tauri::command]
-async fn lock_vault(state: State<'_, AppState>) -> Result<(), String> {
+async fn lock_vault(_app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
     *state.vault_manager.lock().unwrap() = None;
     *state.vault_unlocked.lock().unwrap() = false;
     Ok(())
@@ -96,6 +99,7 @@ async fn lock_vault(state: State<'_, AppState>) -> Result<(), String> {
 
 #[tauri::command]
 async fn add_credential(
+    _app: AppHandle,
     state: State<'_, AppState>,
     credential_data: CredentialData,
 ) -> Result<String, String> {
@@ -122,6 +126,7 @@ async fn add_credential(
 
 #[tauri::command]
 async fn get_credential(
+    _app: AppHandle,
     state: State<'_, AppState>,
     credential_id: String,
 ) -> Result<CredentialData, String> {
@@ -147,6 +152,7 @@ async fn get_credential(
 
 #[tauri::command]
 async fn list_credentials(
+    _app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<CredentialData>, String> {
     let vault_manager_guard = state.vault_manager.lock().unwrap();
@@ -170,6 +176,7 @@ async fn list_credentials(
 
 #[tauri::command]
 async fn update_credential(
+    _app: AppHandle,
     state: State<'_, AppState>,
     credential_id: String,
     credential_data: CredentialData,
@@ -200,6 +207,7 @@ async fn update_credential(
 
 #[tauri::command]
 async fn delete_credential(
+    _app: AppHandle,
     state: State<'_, AppState>,
     credential_id: String,
 ) -> Result<(), String> {
