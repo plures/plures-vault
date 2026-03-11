@@ -244,7 +244,6 @@ pub fn run() {
             update_credential,
             delete_credential,
         ])
-        .plugin(tauri_plugin_store::Builder::default().build())
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

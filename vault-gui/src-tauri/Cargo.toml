@@ -7,18 +7,21 @@ license = "MIT"
 repository = "https://github.com/plures/plures-vault"
 edition = "2021"
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+[lib]
+name = "plures_vault_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "1.5", features = [] }
+tauri-build = { version = "2.0.0", features = [] }
 
 [dependencies]
-tauri = { version = "1.5", features = ["api-all"] }
+tauri = { version = "2.0.0", features = [] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
+log = "0.4"
 
 # Add our vault core dependencies
 vault-core = { path = "../../crates/vault-core" }
