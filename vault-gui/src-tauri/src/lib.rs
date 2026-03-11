@@ -1,11 +1,11 @@
 use tauri::{AppHandle, Manager, State};
-use vault_core::{VaultManager, Credential};
+use vault_core::VaultManager;
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
 // Application state
 pub struct AppState {
-    vault_manager: Mutex<Option<VaultManager>>,
+    vault_database_path: Mutex<Option<String>>,
     vault_unlocked: Mutex<bool>,
 }
 
@@ -60,14 +60,14 @@ async fn initialize_vault(
     vault_name: String,
     master_password: String,
 ) -> Result<(), String> {
-    let vault_manager = VaultManager::new(&database_path).await
+    let mut vault_manager = VaultManager::new(&database_path).await
         .map_err(|e| format!("Failed to initialize vault manager: {}", e))?;
 
     vault_manager.init_vault(&vault_name, &master_password).await
         .map_err(|e| e.to_string())?;
 
-    // Store the initialized vault manager
-    *state.vault_manager.lock().unwrap() = Some(vault_manager);
+    // Store the database path and set unlocked status
+    *state.vault_database_path.lock().unwrap() = Some(database_path);
     *state.vault_unlocked.lock().unwrap() = true;
 
     Ok(())
@@ -80,14 +80,14 @@ async fn unlock_vault(
     database_path: String,
     master_password: String,
 ) -> Result<(), String> {
-    let vault_manager = VaultManager::new(&database_path).await
+    let mut vault_manager = VaultManager::new(&database_path).await
         .map_err(|e| format!("Failed to initialize vault manager: {}", e))?;
 
-    vault_manager.unlock(&master_password).await
+    vault_manager.unlock_vault(&master_password).await
         .map_err(|e| e.to_string())?;
 
-    // Store the unlocked vault manager
-    *state.vault_manager.lock().unwrap() = Some(vault_manager);
+    // Store the database path and set unlocked status
+    *state.vault_database_path.lock().unwrap() = Some(database_path);
     *state.vault_unlocked.lock().unwrap() = true;
 
     Ok(())
@@ -106,19 +106,30 @@ async fn add_credential(
     state: State<'_, AppState>,
     credential_data: CredentialData,
 ) -> Result<String, String> {
-    // Clone the vault manager to avoid holding the lock across await
-    let vault_manager = {
-        let vault_manager_guard = state.vault_manager.lock().unwrap();
-        vault_manager_guard.clone()
-            .ok_or("Vault not unlocked")?
+    // Get the database path
+    let database_path = {
+        let path_guard = state.vault_database_path.lock().unwrap();
+        path_guard.as_ref()
+            .ok_or("Vault not initialized")?
+            .clone()
     };
+
+    // Check if vault is unlocked
+    let is_unlocked = *state.vault_unlocked.lock().unwrap();
+    if !is_unlocked {
+        return Err("Vault is not unlocked".to_string());
+    }
+
+    // Create vault manager and perform operation
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to create vault manager: {}", e))?;
 
     let credential_id = vault_manager.add_credential(
         credential_data.name,
         if credential_data.username.is_empty() { None } else { Some(credential_data.username) },
-        Some(credential_data.password), // Password should be Some()
-        if credential_data.url.is_some() { credential_data.url } else { None },
-        if credential_data.notes.is_some() { credential_data.notes } else { None },
+        credential_data.password,
+        credential_data.url,
+        credential_data.notes,
     ).await
         .map_err(|e| e.to_string())?;
 
@@ -131,12 +142,23 @@ async fn get_credential(
     state: State<'_, AppState>,
     credential_id: String,
 ) -> Result<CredentialData, String> {
-    // Clone the vault manager to avoid holding the lock across await
-    let vault_manager = {
-        let vault_manager_guard = state.vault_manager.lock().unwrap();
-        vault_manager_guard.clone()
-            .ok_or("Vault not unlocked")?
+    // Get the database path
+    let database_path = {
+        let path_guard = state.vault_database_path.lock().unwrap();
+        path_guard.as_ref()
+            .ok_or("Vault not initialized")?
+            .clone()
     };
+
+    // Check if vault is unlocked
+    let is_unlocked = *state.vault_unlocked.lock().unwrap();
+    if !is_unlocked {
+        return Err("Vault is not unlocked".to_string());
+    }
+
+    // Create vault manager and perform operation
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to create vault manager: {}", e))?;
 
     let credential = vault_manager.get_credential(&credential_id).await
         .map_err(|e| e.to_string())?;
@@ -160,9 +182,23 @@ async fn list_credentials(
     _app: AppHandle,
     state: State<'_, AppState>,
 ) -> Result<Vec<CredentialData>, String> {
-    let vault_manager_guard = state.vault_manager.lock().unwrap();
-    let vault_manager = vault_manager_guard.as_ref()
-        .ok_or("Vault not unlocked")?;
+    // Get the database path
+    let database_path = {
+        let path_guard = state.vault_database_path.lock().unwrap();
+        path_guard.as_ref()
+            .ok_or("Vault not initialized")?
+            .clone()
+    };
+
+    // Check if vault is unlocked
+    let is_unlocked = *state.vault_unlocked.lock().unwrap();
+    if !is_unlocked {
+        return Err("Vault is not unlocked".to_string());
+    }
+
+    // Create vault manager and perform operation
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to create vault manager: {}", e))?;
 
     let credentials = vault_manager.list_credentials().await
         .map_err(|e| e.to_string())?;
@@ -186,18 +222,29 @@ async fn update_credential(
     credential_id: String,
     credential_data: CredentialData,
 ) -> Result<(), String> {
-    let vault_manager_guard = state.vault_manager.lock().unwrap();
-    let vault_manager = vault_manager_guard.as_ref()
-        .ok_or("Vault not unlocked")?;
+    // Get the database path
+    let database_path = {
+        let path_guard = state.vault_database_path.lock().unwrap();
+        path_guard.as_ref()
+            .ok_or("Vault not initialized")?
+            .clone()
+    };
 
-    let id = uuid::Uuid::parse_str(&credential_id)
-        .map_err(|e| format!("Invalid UUID: {}", e))?;
+    // Check if vault is unlocked
+    let is_unlocked = *state.vault_unlocked.lock().unwrap();
+    if !is_unlocked {
+        return Err("Vault is not unlocked".to_string());
+    }
+
+    // Create vault manager and perform operation
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to create vault manager: {}", e))?;
 
     // Use the VaultManager's update method with individual parameters
     vault_manager.update_credential(
         &credential_id, // Find by name/id
         if credential_data.username.is_empty() { None } else { Some(credential_data.username) },
-        credential_data.password,
+        Some(credential_data.password),
         credential_data.url,
         credential_data.notes,
     ).await
@@ -212,12 +259,23 @@ async fn delete_credential(
     state: State<'_, AppState>,
     credential_id: String,
 ) -> Result<(), String> {
-    let vault_manager_guard = state.vault_manager.lock().unwrap();
-    let vault_manager = vault_manager_guard.as_ref()
-        .ok_or("Vault not unlocked")?;
+    // Get the database path
+    let database_path = {
+        let path_guard = state.vault_database_path.lock().unwrap();
+        path_guard.as_ref()
+            .ok_or("Vault not initialized")?
+            .clone()
+    };
 
-    let id = uuid::Uuid::parse_str(&credential_id)
-        .map_err(|e| format!("Invalid UUID: {}", e))?;
+    // Check if vault is unlocked
+    let is_unlocked = *state.vault_unlocked.lock().unwrap();
+    if !is_unlocked {
+        return Err("Vault is not unlocked".to_string());
+    }
+
+    // Create vault manager and perform operation
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to create vault manager: {}", e))?;
 
     vault_manager.delete_credential(&credential_id).await
         .map_err(|e| e.to_string())?;
@@ -228,7 +286,7 @@ async fn delete_credential(
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_state = AppState {
-        vault_manager: Mutex::new(None),
+        vault_database_path: Mutex::new(None),
         vault_unlocked: Mutex::new(false),
     };
 
