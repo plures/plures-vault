@@ -3440,6 +3440,7 @@ dependencies = [
  "tokio",
  "vault-core",
  "vault-crypto",
+ "vault-sync",
 ]
 
 [[package]]

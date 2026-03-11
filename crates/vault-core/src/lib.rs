@@ -346,4 +346,27 @@ impl VaultManager {
     pub fn lock(&mut self) {
         self.master_key = None;
     }
+
+    pub async fn get_vault_metadata(&self) -> Result<VaultMetadata> {
+        // Get vault metadata  
+        let row = sqlx::query("SELECT * FROM vault_metadata LIMIT 1")
+            .fetch_optional(&self.pool)
+            .await?
+            .ok_or(VaultError::VaultNotInitialized)?;
+
+        let metadata = VaultMetadata {
+            id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+            name: row.get("name"),
+            created_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))?.with_timezone(&Utc),
+            password_hash: row.get("password_hash"),
+            salt: row.get("salt"),
+        };
+
+        Ok(metadata)
+    }
+
+    pub async fn check_initialization(&self) -> Result<VaultMetadata> {
+        // Same as get_vault_metadata but for backward compatibility
+        self.get_vault_metadata().await
+    }
 }

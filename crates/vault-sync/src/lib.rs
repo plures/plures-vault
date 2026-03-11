@@ -3,6 +3,11 @@ use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use anyhow::Result;
 use thiserror::Error;
+use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 
 #[derive(Error, Debug)]
 pub enum SyncError {
@@ -16,6 +21,10 @@ pub enum SyncError {
     PeerNotFound(String),
     #[error("Authentication failed")]
     AuthenticationFailed,
+    #[error("IO error: {0}")]
+    IoError(#[from] std::io::Error),
+    #[error("JSON error: {0}")]
+    JsonError(#[from] serde_json::Error),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -35,6 +44,8 @@ pub enum MessageType {
     CredentialSync,
     ConflictResolution,
     Heartbeat,
+    Ping,
+    Pong,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -42,6 +53,7 @@ pub struct PeerIdentity {
     pub id: Uuid,
     pub public_key: String, // For authentication
     pub last_seen: DateTime<Utc>,
+    pub address: Option<String>, // IP:Port for TCP connection
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -60,6 +72,8 @@ pub enum SyncPayload {
     VectorClock {
         entries: Vec<(Uuid, u64)>, // peer_id -> clock_value
     },
+    Ping,
+    Pong,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -70,64 +84,280 @@ pub enum OperationType {
 }
 
 pub struct SyncManager {
-    peers: Vec<PeerIdentity>,
-    local_clock: u64,
+    peers: Arc<Mutex<HashMap<Uuid, PeerIdentity>>>,
+    local_clock: Arc<Mutex<u64>>,
     vault_id: Uuid,
+    local_peer_id: Uuid,
+    listener: Option<TcpListener>,
 }
 
 impl SyncManager {
     pub fn new(vault_id: Uuid) -> Self {
         Self {
-            peers: Vec::new(),
-            local_clock: 0,
+            peers: Arc::new(Mutex::new(HashMap::new())),
+            local_clock: Arc::new(Mutex::new(0)),
             vault_id,
+            local_peer_id: Uuid::new_v4(),
+            listener: None,
         }
     }
 
-    pub async fn start_sync_server(&mut self, _port: u16) -> Result<()> {
-        // TODO: Phase 2 - Implement Hyperswarm P2P discovery and sync
-        // This will use the Hyperswarm DHT for peer discovery
-        // and establish encrypted connections for credential sync
+    pub async fn start_sync_server(&mut self, port: u16) -> Result<()> {
+        let addr = format!("0.0.0.0:{}", port);
+        let listener = TcpListener::bind(&addr).await?;
         
-        println!("🔄 Sync server starting (Phase 2 implementation pending)...");
+        println!("🔄 P2P sync server started on {}", addr);
+        
+        let peers = Arc::clone(&self.peers);
+        let clock = Arc::clone(&self.local_clock);
+        let vault_id = self.vault_id;
+        let local_peer_id = self.local_peer_id;
+
+        tokio::spawn(async move {
+            loop {
+                match listener.accept().await {
+                    Ok((stream, addr)) => {
+                        println!("📡 New peer connection from: {}", addr);
+                        let peers_clone = Arc::clone(&peers);
+                        let clock_clone = Arc::clone(&clock);
+                        
+                        tokio::spawn(async move {
+                            if let Err(e) = Self::handle_peer_connection(
+                                stream, 
+                                peers_clone, 
+                                clock_clone, 
+                                vault_id,
+                                local_peer_id
+                            ).await {
+                                println!("❌ Peer connection error: {}", e);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        println!("❌ Failed to accept connection: {}", e);
+                    }
+                }
+            }
+        });
+
         Ok(())
     }
 
-    pub async fn connect_to_peer(&mut self, _peer_address: &str) -> Result<PeerIdentity> {
-        // TODO: Phase 2 - Implement peer connection via Hyperswarm
+    async fn handle_peer_connection(
+        mut stream: TcpStream,
+        peers: Arc<Mutex<HashMap<Uuid, PeerIdentity>>>,
+        clock: Arc<Mutex<u64>>,
+        vault_id: Uuid,
+        local_peer_id: Uuid,
+    ) -> Result<()> {
+        let mut buffer = [0; 1024];
         
-        Err(SyncError::NetworkError("P2P sync not yet implemented".to_string()).into())
+        loop {
+            match stream.read(&mut buffer).await {
+                Ok(0) => {
+                    println!("📡 Peer disconnected");
+                    break;
+                }
+                Ok(n) => {
+                    let data = &buffer[..n];
+                    
+                    // Try to parse as JSON message
+                    if let Ok(message_str) = String::from_utf8(data.to_vec()) {
+                        if let Ok(message) = serde_json::from_str::<SyncMessage>(&message_str) {
+                            Self::handle_sync_message(
+                                &message,
+                                &mut stream,
+                                Arc::clone(&peers),
+                                Arc::clone(&clock),
+                                vault_id,
+                                local_peer_id,
+                            ).await?;
+                        }
+                    }
+                }
+                Err(e) => {
+                    println!("❌ Read error: {}", e);
+                    break;
+                }
+            }
+        }
+        
+        Ok(())
     }
 
-    pub fn increment_clock(&mut self) {
-        self.local_clock += 1;
+    async fn handle_sync_message(
+        message: &SyncMessage,
+        stream: &mut TcpStream,
+        peers: Arc<Mutex<HashMap<Uuid, PeerIdentity>>>,
+        clock: Arc<Mutex<u64>>,
+        vault_id: Uuid,
+        local_peer_id: Uuid,
+    ) -> Result<()> {
+        match message.msg_type {
+            MessageType::HandshakeRequest => {
+                // Respond with handshake
+                let response = SyncMessage {
+                    id: Uuid::new_v4(),
+                    msg_type: MessageType::HandshakeResponse,
+                    sender: PeerIdentity {
+                        id: local_peer_id,
+                        public_key: "local_pubkey".to_string(), // TODO: Real crypto
+                        last_seen: Utc::now(),
+                        address: None,
+                    },
+                    recipient: Some(message.sender.clone()),
+                    timestamp: Utc::now(),
+                    payload: SyncPayload::Handshake {
+                        vault_id,
+                        protocol_version: "1.0".to_string(),
+                        public_key: "local_pubkey".to_string(),
+                    },
+                };
+
+                let response_json = serde_json::to_string(&response)?;
+                stream.write_all(response_json.as_bytes()).await?;
+
+                // Store peer
+                peers.lock().await.insert(message.sender.id, message.sender.clone());
+                println!("🤝 Handshake completed with peer: {}", message.sender.id);
+            }
+            MessageType::Ping => {
+                let pong = SyncMessage {
+                    id: Uuid::new_v4(),
+                    msg_type: MessageType::Pong,
+                    sender: PeerIdentity {
+                        id: local_peer_id,
+                        public_key: "local_pubkey".to_string(),
+                        last_seen: Utc::now(),
+                        address: None,
+                    },
+                    recipient: Some(message.sender.clone()),
+                    timestamp: Utc::now(),
+                    payload: SyncPayload::Pong,
+                };
+
+                let pong_json = serde_json::to_string(&pong)?;
+                stream.write_all(pong_json.as_bytes()).await?;
+            }
+            MessageType::CredentialSync => {
+                // Handle credential synchronization
+                Self::increment_clock_static(Arc::clone(&clock)).await;
+                println!("📤 Credential sync received: {:?}", message.payload);
+                
+                // TODO: Apply credential changes to local vault
+                // This will integrate with vault-core to update credentials
+            }
+            _ => {
+                println!("📬 Received message: {:?}", message.msg_type);
+            }
+        }
+
+        Ok(())
     }
 
-    pub fn get_clock(&self) -> u64 {
-        self.local_clock
+    pub async fn connect_to_peer(&mut self, peer_address: &str) -> Result<PeerIdentity> {
+        println!("🔗 Connecting to peer: {}", peer_address);
+        
+        let mut stream = TcpStream::connect(peer_address).await?;
+        
+        // Send handshake
+        let handshake = SyncMessage {
+            id: Uuid::new_v4(),
+            msg_type: MessageType::HandshakeRequest,
+            sender: PeerIdentity {
+                id: self.local_peer_id,
+                public_key: "local_pubkey".to_string(),
+                last_seen: Utc::now(),
+                address: None,
+            },
+            recipient: None,
+            timestamp: Utc::now(),
+            payload: SyncPayload::Handshake {
+                vault_id: self.vault_id,
+                protocol_version: "1.0".to_string(),
+                public_key: "local_pubkey".to_string(),
+            },
+        };
+
+        let handshake_json = serde_json::to_string(&handshake)?;
+        stream.write_all(handshake_json.as_bytes()).await?;
+        
+        // Read response
+        let mut buffer = [0; 1024];
+        let n = stream.read(&mut buffer).await?;
+        let response_data = &buffer[..n];
+        
+        if let Ok(response_str) = String::from_utf8(response_data.to_vec()) {
+            if let Ok(response) = serde_json::from_str::<SyncMessage>(&response_str) {
+                if let MessageType::HandshakeResponse = response.msg_type {
+                    let peer = response.sender.clone();
+                    self.peers.lock().await.insert(peer.id, peer.clone());
+                    println!("✅ Successfully connected to peer: {}", peer.id);
+                    return Ok(peer);
+                }
+            }
+        }
+
+        Err(SyncError::NetworkError("Invalid handshake response".to_string()).into())
     }
 
-    pub fn add_peer(&mut self, peer: PeerIdentity) {
-        self.peers.push(peer);
+    pub async fn increment_clock(&self) {
+        let mut clock_guard = self.local_clock.lock().await;
+        *clock_guard += 1;
     }
 
-    pub fn list_peers(&self) -> &[PeerIdentity] {
-        &self.peers
+    async fn increment_clock_static(clock: Arc<Mutex<u64>>) {
+        let mut clock_guard = clock.lock().await;
+        *clock_guard += 1;
+    }
+
+    pub async fn get_clock(&self) -> u64 {
+        *self.local_clock.lock().await
+    }
+
+    pub async fn list_peers(&self) -> Vec<PeerIdentity> {
+        self.peers.lock().await.values().cloned().collect()
     }
 
     pub async fn sync_credential(
         &mut self,
-        _credential_id: Uuid,
-        _encrypted_data: String,
-        _operation: OperationType,
+        credential_id: Uuid,
+        encrypted_data: String,
+        operation: OperationType,
     ) -> Result<()> {
-        // TODO: Phase 2 - Implement credential sync across peers
-        // This will handle conflict resolution using vector clocks
-        // and ensure all peers have the latest credential data
+        self.increment_clock().await;
         
-        self.increment_clock();
-        println!("📤 Credential sync queued (Phase 2 implementation pending)");
+        let message = SyncMessage {
+            id: Uuid::new_v4(),
+            msg_type: MessageType::CredentialSync,
+            sender: PeerIdentity {
+                id: self.local_peer_id,
+                public_key: "local_pubkey".to_string(),
+                last_seen: Utc::now(),
+                address: None,
+            },
+            recipient: None, // Broadcast to all peers
+            timestamp: Utc::now(),
+            payload: SyncPayload::CredentialUpdate {
+                credential_id,
+                encrypted_data,
+                version: self.get_clock().await,
+                operation,
+            },
+        };
+
+        // TODO: Send to all connected peers
+        println!("📤 Credential sync initiated: {:?}", message.payload);
+        
         Ok(())
+    }
+
+    pub fn get_local_peer_id(&self) -> Uuid {
+        self.local_peer_id
+    }
+
+    pub fn get_vault_id(&self) -> Uuid {
+        self.vault_id
     }
 }
 
@@ -135,39 +365,23 @@ impl SyncManager {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_sync_manager_creation() {
+    #[tokio::test]
+    async fn test_sync_manager_creation() {
         let vault_id = Uuid::new_v4();
         let sync_manager = SyncManager::new(vault_id);
         
-        assert_eq!(sync_manager.vault_id, vault_id);
-        assert_eq!(sync_manager.get_clock(), 0);
-        assert_eq!(sync_manager.list_peers().len(), 0);
+        assert_eq!(sync_manager.get_vault_id(), vault_id);
+        assert_eq!(sync_manager.get_clock().await, 0);
+        assert_eq!(sync_manager.list_peers().await.len(), 0);
     }
 
-    #[test]
-    fn test_clock_increment() {
+    #[tokio::test]
+    async fn test_clock_increment() {
         let vault_id = Uuid::new_v4();
-        let mut sync_manager = SyncManager::new(vault_id);
+        let sync_manager = SyncManager::new(vault_id);
         
-        assert_eq!(sync_manager.get_clock(), 0);
-        sync_manager.increment_clock();
-        assert_eq!(sync_manager.get_clock(), 1);
-    }
-
-    #[test]
-    fn test_peer_management() {
-        let vault_id = Uuid::new_v4();
-        let mut sync_manager = SyncManager::new(vault_id);
-        
-        let peer = PeerIdentity {
-            id: Uuid::new_v4(),
-            public_key: "test_key".to_string(),
-            last_seen: Utc::now(),
-        };
-        
-        sync_manager.add_peer(peer.clone());
-        assert_eq!(sync_manager.list_peers().len(), 1);
-        assert_eq!(sync_manager.list_peers()[0].id, peer.id);
+        assert_eq!(sync_manager.get_clock().await, 0);
+        sync_manager.increment_clock().await;
+        assert_eq!(sync_manager.get_clock().await, 1);
     }
 }

@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand};
 use vault_core::{VaultManager, VaultError};
+use vault_sync::SyncManager;
 use anyhow::Result;
 use std::io::{self, Write};
 
@@ -61,9 +62,21 @@ enum Commands {
         #[arg(short, long)]
         name: String,
     },
+    /// Start P2P sync server
+    StartSync {
+        #[arg(short, long, default_value = "8080")]
+        port: u16,
+    },
+    /// Connect to a peer
+    ConnectPeer {
+        #[arg(short, long)]
+        address: String,
+    },
+    /// List connected peers
+    ListPeers,
     /// Lock the vault
     Lock,
-    /// Sync with other devices (placeholder)
+    /// Sync with other devices (placeholder for GUI)
     Sync,
 }
 
@@ -259,6 +272,75 @@ async fn main() -> Result<()> {
                 println!("❌ Credential '{}' not found", name);
             }
         }
+
+        Commands::StartSync { port } => {
+            if !vault.is_unlocked() {
+                let password = prompt_password("Enter master password to unlock vault: ")?;
+                vault.unlock_vault(&password).await?;
+            }
+
+            println!("🚀 Starting P2P sync server on port {}...", port);
+            
+            // Get vault metadata for sync
+            let metadata = vault.get_vault_metadata().await?;
+            let mut sync_manager = SyncManager::new(metadata.id);
+            
+            sync_manager.start_sync_server(port).await?;
+            
+            println!("✅ P2P sync server running. Press Ctrl+C to stop.");
+            
+            // Keep the server running
+            tokio::signal::ctrl_c().await?;
+            println!("\n🔄 Sync server stopped");
+        }
+
+        Commands::ConnectPeer { address } => {
+            if !vault.is_unlocked() {
+                let password = prompt_password("Enter master password to unlock vault: ")?;
+                vault.unlock_vault(&password).await?;
+            }
+
+            println!("🔗 Connecting to peer: {}", address);
+            
+            let metadata = vault.get_vault_metadata().await?;
+            let mut sync_manager = SyncManager::new(metadata.id);
+            
+            match sync_manager.connect_to_peer(&address).await {
+                Ok(peer) => {
+                    println!("✅ Successfully connected to peer: {}", peer.id);
+                    println!("   Public Key: {}", peer.public_key);
+                    println!("   Last Seen: {}", peer.last_seen.format("%Y-%m-%d %H:%M:%S UTC"));
+                }
+                Err(e) => {
+                    println!("❌ Failed to connect to peer: {}", e);
+                }
+            }
+        }
+
+        Commands::ListPeers => {
+            if !vault.is_unlocked() {
+                let password = prompt_password("Enter master password to unlock vault: ")?;
+                vault.unlock_vault(&password).await?;
+            }
+
+            println!("👥 Connected peers:");
+            
+            let metadata = vault.get_vault_metadata().await?;
+            let sync_manager = SyncManager::new(metadata.id);
+            let peers = sync_manager.list_peers().await;
+            
+            if peers.is_empty() {
+                println!("   (no peers connected)");
+            } else {
+                for peer in peers {
+                    println!("   • {} ({})", peer.id, peer.public_key);
+                    println!("     Last seen: {}", peer.last_seen.format("%Y-%m-%d %H:%M:%S UTC"));
+                    if let Some(address) = &peer.address {
+                        println!("     Address: {}", address);
+                    }
+                }
+            }
+        }
         
         Commands::Lock => {
             vault.lock();
@@ -267,8 +349,7 @@ async fn main() -> Result<()> {
         
         Commands::Sync => {
             println!("🔄 Syncing with other devices...");
-            // TODO: Implement P2P sync via Hyperswarm
-            println!("⚠️  Sync not yet implemented - coming in Phase 2");
+            println!("💡 Use 'start-sync' to run P2P server, or 'connect-peer' to connect to another device");
         }
     }
 
