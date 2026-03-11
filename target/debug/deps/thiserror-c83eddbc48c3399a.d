@@ -1,0 +1,14 @@
+/home/kbristol/.openclaw/workspace/repos/plures/plures-vault/target/debug/deps/thiserror-c83eddbc48c3399a.d: /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/kbristol/.openclaw/workspace/repos/plures/plures-vault/target/debug/build/thiserror-c729ee368bdfcf2e/out/private.rs
+
+/home/kbristol/.openclaw/workspace/repos/plures/plures-vault/target/debug/deps/libthiserror-c83eddbc48c3399a.rlib: /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/kbristol/.openclaw/workspace/repos/plures/plures-vault/target/debug/build/thiserror-c729ee368bdfcf2e/out/private.rs
+
+/home/kbristol/.openclaw/workspace/repos/plures/plures-vault/target/debug/deps/libthiserror-c83eddbc48c3399a.rmeta: /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs /home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs /home/kbristol/.openclaw/workspace/repos/plures/plures-vault/target/debug/build/thiserror-c729ee368bdfcf2e/out/private.rs
+
+/home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/lib.rs:
+/home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/aserror.rs:
+/home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/display.rs:
+/home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/var.rs:
+/home/kbristol/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/thiserror-2.0.18/src/private.rs:
+/home/kbristol/.openclaw/workspace/repos/plures/plures-vault/target/debug/build/thiserror-c729ee368bdfcf2e/out/private.rs:
+
+# env-dep:OUT_DIR=/home/kbristol/.openclaw/workspace/repos/plures/plures-vault/target/debug/build/thiserror-c729ee368bdfcf2e/out
