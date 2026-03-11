@@ -33,7 +33,7 @@ async fn check_vault_status(
     database_path: String,
 ) -> Result<VaultStatus, String> {
     let vault_manager = VaultManager::new(&database_path);
-    
+
     match vault_manager.check_initialization().await {
         Ok(metadata) => {
             let unlocked = *state.vault_unlocked.lock().unwrap();
@@ -60,14 +60,14 @@ async fn initialize_vault(
     master_password: String,
 ) -> Result<(), String> {
     let mut vault_manager = VaultManager::new(&database_path);
-    
+
     vault_manager.init_vault(&vault_name, &master_password).await
         .map_err(|e| e.to_string())?;
-    
+
     // Store the initialized vault manager
     *state.vault_manager.lock().unwrap() = Some(vault_manager);
     *state.vault_unlocked.lock().unwrap() = true;
-    
+
     Ok(())
 }
 
@@ -79,14 +79,14 @@ async fn unlock_vault(
     master_password: String,
 ) -> Result<(), String> {
     let mut vault_manager = VaultManager::new(&database_path);
-    
+
     vault_manager.unlock(&master_password).await
         .map_err(|e| e.to_string())?;
-    
+
     // Store the unlocked vault manager
     *state.vault_manager.lock().unwrap() = Some(vault_manager);
     *state.vault_unlocked.lock().unwrap() = true;
-    
+
     Ok(())
 }
 
@@ -106,22 +106,17 @@ async fn add_credential(
     let vault_manager_guard = state.vault_manager.lock().unwrap();
     let vault_manager = vault_manager_guard.as_ref()
         .ok_or("Vault not unlocked")?;
-    
-    let credential = Credential {
-        id: uuid::Uuid::new_v4(),
-        name: credential_data.name,
-        username: credential_data.username,
-        password: credential_data.password,
-        url: credential_data.url.unwrap_or_default(),
-        notes: credential_data.notes.unwrap_or_default(),
-        created_at: chrono::Utc::now(),
-        updated_at: chrono::Utc::now(),
-    };
-    
-    vault_manager.store_credential(&credential).await
+
+    let credential_id = vault_manager.add_credential(
+        credential_data.name,
+        if credential_data.username.is_empty() { None } else { Some(credential_data.username) },
+        credential_data.password,
+        if credential_data.url.is_some() { credential_data.url } else { None },
+        if credential_data.notes.is_some() { credential_data.notes } else { None },
+    ).await
         .map_err(|e| e.to_string())?;
-    
-    Ok(credential.id.to_string())
+
+    Ok(credential_id.id.to_string())
 }
 
 #[tauri::command]
@@ -133,21 +128,25 @@ async fn get_credential(
     let vault_manager_guard = state.vault_manager.lock().unwrap();
     let vault_manager = vault_manager_guard.as_ref()
         .ok_or("Vault not unlocked")?;
-    
+
     let id = uuid::Uuid::parse_str(&credential_id)
         .map_err(|e| format!("Invalid UUID: {}", e))?;
-    
-    let credential = vault_manager.get_credential(&id).await
+
+    let credential = vault_manager.get_credential(&credential_id).await
         .map_err(|e| e.to_string())?;
-    
-    Ok(CredentialData {
-        id: Some(credential.id.to_string()),
-        name: credential.name,
-        username: credential.username,
-        password: credential.password,
-        url: Some(credential.url),
-        notes: Some(credential.notes),
-    })
+
+    if let Some(credential) = credential {
+        Ok(CredentialData {
+            id: Some(credential.id.to_string()),
+            name: credential.name,
+            username: credential.username.unwrap_or_default(),
+            password: credential.password,
+            url: credential.url,
+            notes: credential.notes,
+        })
+    } else {
+        Err("Credential not found".to_string())
+    }
 }
 
 #[tauri::command]
@@ -158,19 +157,19 @@ async fn list_credentials(
     let vault_manager_guard = state.vault_manager.lock().unwrap();
     let vault_manager = vault_manager_guard.as_ref()
         .ok_or("Vault not unlocked")?;
-    
+
     let credentials = vault_manager.list_credentials().await
         .map_err(|e| e.to_string())?;
-    
+
     let credential_data: Vec<CredentialData> = credentials.into_iter().map(|c| CredentialData {
         id: Some(c.id.to_string()),
         name: c.name,
-        username: c.username,
+        username: c.username.unwrap_or_default(),
         password: "••••••••••••".to_string(), // Don't expose passwords in list view
-        url: Some(c.url),
-        notes: Some(c.notes),
+        url: c.url,
+        notes: c.notes,
     }).collect();
-    
+
     Ok(credential_data)
 }
 
@@ -184,24 +183,20 @@ async fn update_credential(
     let vault_manager_guard = state.vault_manager.lock().unwrap();
     let vault_manager = vault_manager_guard.as_ref()
         .ok_or("Vault not unlocked")?;
-    
+
     let id = uuid::Uuid::parse_str(&credential_id)
         .map_err(|e| format!("Invalid UUID: {}", e))?;
-    
-    let mut credential = vault_manager.get_credential(&id).await
-        .map_err(|e| e.to_string())?;
-    
-    // Update fields
-    credential.name = credential_data.name;
-    credential.username = credential_data.username;
-    credential.password = credential_data.password;
-    credential.url = credential_data.url.unwrap_or_default();
-    credential.notes = credential_data.notes.unwrap_or_default();
-    credential.updated_at = chrono::Utc::now();
-    
-    vault_manager.update_credential(&credential).await
-        .map_err(|e| e.to_string())?;
-    
+
+    // Use the VaultManager's update method with individual parameters
+    vault_manager.update_credential(
+        &credential_id, // Find by name/id
+        if credential_data.username.is_empty() { None } else { Some(credential_data.username) },
+        credential_data.password,
+        credential_data.url,
+        credential_data.notes,
+    ).await
+    .map_err(|e| e.to_string())?;
+
     Ok(())
 }
 
@@ -214,13 +209,13 @@ async fn delete_credential(
     let vault_manager_guard = state.vault_manager.lock().unwrap();
     let vault_manager = vault_manager_guard.as_ref()
         .ok_or("Vault not unlocked")?;
-    
+
     let id = uuid::Uuid::parse_str(&credential_id)
         .map_err(|e| format!("Invalid UUID: {}", e))?;
-    
-    vault_manager.delete_credential(&id).await
+
+    vault_manager.delete_credential(&credential_id).await
         .map_err(|e| e.to_string())?;
-    
+
     Ok(())
 }
 
