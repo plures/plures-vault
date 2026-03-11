@@ -25,7 +25,7 @@
 	},
 	"dependencies": {
 		"@plures/design-dojo": "file:../../design-dojo",
-		"@tauri-apps/api": "^1.8.0",
-		"@tauri-apps/cli": "^1.8.0"
+		"@tauri-apps/api": "^2.10.1",
+		"@tauri-apps/cli": "^2.10.1"
 	}
 }

@@ -228,8 +228,8 @@ pub fn run() {
         .setup(|app| {
             #[cfg(debug_assertions)]
             {
-                let window = app.get_window("main").unwrap();
-                window.open_devtools();
+                let window = app.get_webview_window("main").unwrap();
+                let _ = window.open_devtools();
             }
             Ok(())
         })

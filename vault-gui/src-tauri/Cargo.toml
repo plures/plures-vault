@@ -12,10 +12,10 @@ name = "plures_vault_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
-tauri-build = { version = "1.5", features = [] }
+tauri-build = { version = "2.0", features = [] }
 
 [dependencies]
-tauri = { version = "1.8", features = ["api-all"] }
+tauri = { version = "2.1", features = ["devtools"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1", features = ["full"] }
