@@ -1,0 +1,21 @@
+[package]
+name = "vault-sync"
+version = "0.1.0"
+edition = "2021"
+authors = ["Plures Team <dev@plures.ai>"]
+description = "P2P synchronization for Plures Vault"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+vault-core = { path = "../vault-core" }
+vault-crypto = { path = "../vault-crypto" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+thiserror = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# P2P networking (Hyperswarm integration planned)
+# hyperswarm = { git = "https://github.com/plures/hyperswarm-rs" }  # TODO: Phase 2

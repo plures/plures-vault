@@ -13,7 +13,7 @@ chrono = { version = "0.4", features = ["serde"] }
 anyhow = "1.0"
 thiserror = "1.0"
 tokio = { version = "1.0", features = ["full"] }
+argon2 = "0.5"
 
-# PluresDB integration - will use SQLite for now, migrate to native PluresDB when available
-rusqlite = { version = "0.31", features = ["bundled"] }
+# Use only SQLx for database operations (avoids rusqlite conflict)
 sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "sqlite"] }

@@ -1,9 +1,8 @@
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
 use argon2::password_hash::{rand_core::OsRng, SaltString};
 use aes_gcm::{Aes256Gcm, Key, Nonce, KeyInit};
-use aes_gcm::aead::{Aead, AeadCore, generic_array::GenericArray};
-use rand::RngCore;
-use zeroize::{Zeroize, ZeroizeOnDrop};
+use aes_gcm::aead::{Aead, AeadCore};
+use zeroize::ZeroizeOnDrop;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use base64::{Engine as _, engine::general_purpose};
@@ -11,7 +10,7 @@ use base64::{Engine as _, engine::general_purpose};
 #[derive(Error, Debug)]
 pub enum CryptoError {
     #[error("Argon2 password hashing failed: {0}")]
-    Argon2Error(#[from] argon2::password_hash::Error),
+    Argon2Error(String),
     #[error("AES encryption failed")]
     EncryptionError,
     #[error("AES decryption failed")]
@@ -20,6 +19,12 @@ pub enum CryptoError {
     InvalidKeyLength,
     #[error("Base64 decode error: {0}")]
     Base64Error(#[from] base64::DecodeError),
+}
+
+impl From<argon2::password_hash::Error> for CryptoError {
+    fn from(err: argon2::password_hash::Error) -> Self {
+        CryptoError::Argon2Error(err.to_string())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, ZeroizeOnDrop)]
@@ -35,7 +40,7 @@ pub struct EncryptedData {
 }
 
 pub struct VaultCrypto {
-    argon2: Argon2<'static>,
+    pub argon2: Argon2<'static>,
 }
 
 impl VaultCrypto {

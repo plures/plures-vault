@@ -1,4 +1,5 @@
 use vault_crypto::{VaultCrypto, MasterKey, EncryptedData, CryptoError};
+use argon2::{password_hash::SaltString, PasswordHasher};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
@@ -108,15 +109,16 @@ impl VaultManager {
         // Derive master key and get salt
         let (master_key, salt) = self.crypto.derive_master_key(master_password, None)?;
         
-        // Create password hash for verification
-        let (_, password_hash_salt) = self.crypto.derive_master_key(master_password, Some(&salt))?;
-        let password_hash = format!("$argon2id$v=19$m=19456,t=2,p=1${}", salt);
+        // Create password hash for verification (store the full argon2 hash)
+        let salt_string = SaltString::from_b64(&salt).map_err(|e: argon2::password_hash::Error| CryptoError::Argon2Error(e.to_string()))?;
+        let password_hash = self.crypto.argon2.hash_password(master_password.as_bytes(), &salt_string).map_err(|e| CryptoError::Argon2Error(e.to_string()))?;
+        let password_hash_string = password_hash.to_string();
 
         let metadata = VaultMetadata {
             id: Uuid::new_v4(),
             name: vault_name.to_string(),
             created_at: Utc::now(),
-            password_hash,
+            password_hash: password_hash_string,
             salt,
         };
 
