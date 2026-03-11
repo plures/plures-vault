@@ -32,7 +32,8 @@ async fn check_vault_status(
     state: State<'_, AppState>,
     database_path: String,
 ) -> Result<VaultStatus, String> {
-    let vault_manager = VaultManager::new(&database_path);
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to initialize vault manager: {}", e))?;
 
     match vault_manager.check_initialization().await {
         Ok(metadata) => {
@@ -59,7 +60,8 @@ async fn initialize_vault(
     vault_name: String,
     master_password: String,
 ) -> Result<(), String> {
-    let mut vault_manager = VaultManager::new(&database_path);
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to initialize vault manager: {}", e))?;
 
     vault_manager.init_vault(&vault_name, &master_password).await
         .map_err(|e| e.to_string())?;
@@ -78,7 +80,8 @@ async fn unlock_vault(
     database_path: String,
     master_password: String,
 ) -> Result<(), String> {
-    let mut vault_manager = VaultManager::new(&database_path);
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to initialize vault manager: {}", e))?;
 
     vault_manager.unlock(&master_password).await
         .map_err(|e| e.to_string())?;
@@ -103,14 +106,17 @@ async fn add_credential(
     state: State<'_, AppState>,
     credential_data: CredentialData,
 ) -> Result<String, String> {
-    let vault_manager_guard = state.vault_manager.lock().unwrap();
-    let vault_manager = vault_manager_guard.as_ref()
-        .ok_or("Vault not unlocked")?;
+    // Clone the vault manager to avoid holding the lock across await
+    let vault_manager = {
+        let vault_manager_guard = state.vault_manager.lock().unwrap();
+        vault_manager_guard.clone()
+            .ok_or("Vault not unlocked")?
+    };
 
     let credential_id = vault_manager.add_credential(
         credential_data.name,
         if credential_data.username.is_empty() { None } else { Some(credential_data.username) },
-        credential_data.password,
+        Some(credential_data.password), // Password should be Some()
         if credential_data.url.is_some() { credential_data.url } else { None },
         if credential_data.notes.is_some() { credential_data.notes } else { None },
     ).await
@@ -125,12 +131,12 @@ async fn get_credential(
     state: State<'_, AppState>,
     credential_id: String,
 ) -> Result<CredentialData, String> {
-    let vault_manager_guard = state.vault_manager.lock().unwrap();
-    let vault_manager = vault_manager_guard.as_ref()
-        .ok_or("Vault not unlocked")?;
-
-    let id = uuid::Uuid::parse_str(&credential_id)
-        .map_err(|e| format!("Invalid UUID: {}", e))?;
+    // Clone the vault manager to avoid holding the lock across await
+    let vault_manager = {
+        let vault_manager_guard = state.vault_manager.lock().unwrap();
+        vault_manager_guard.clone()
+            .ok_or("Vault not unlocked")?
+    };
 
     let credential = vault_manager.get_credential(&credential_id).await
         .map_err(|e| e.to_string())?;
