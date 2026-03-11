@@ -95,7 +95,7 @@ async fn unlock_vault(
 
 #[tauri::command]
 async fn lock_vault(_app: AppHandle, state: State<'_, AppState>) -> Result<(), String> {
-    *state.vault_manager.lock().unwrap() = None;
+    *state.vault_database_path.lock().unwrap() = None;
     *state.vault_unlocked.lock().unwrap() = false;
     Ok(())
 }
@@ -127,7 +127,7 @@ async fn add_credential(
     let credential_id = vault_manager.add_credential(
         credential_data.name,
         if credential_data.username.is_empty() { None } else { Some(credential_data.username) },
-        credential_data.password,
+        Some(credential_data.password),
         credential_data.url,
         credential_data.notes,
     ).await
