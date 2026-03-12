@@ -5,7 +5,7 @@ cargo:rerun-if-env-changed=SQLITE_MAX_VARIABLE_NUMBER
 cargo:rerun-if-env-changed=SQLITE_MAX_EXPR_DEPTH
 cargo:rerun-if-env-changed=SQLITE_MAX_COLUMN
 cargo:rerun-if-env-changed=LIBSQLITE3_FLAGS
-OUT_DIR = Some(/home/kbristol/.openclaw/workspace/repos/plures/plures-vault/target/debug/build/libsqlite3-sys-521366ba5fcfa714/out)
+OUT_DIR = Some(/home/runner/work/plures-vault/plures-vault/target/debug/build/libsqlite3-sys-521366ba5fcfa714/out)
 OPT_LEVEL = Some(0)
 TARGET = Some(x86_64-unknown-linux-gnu)
 CARGO_ENCODED_RUSTFLAGS = Some()
@@ -49,5 +49,5 @@ ARFLAGS_x86_64_unknown_linux_gnu = None
 cargo:rerun-if-env-changed=ARFLAGS_x86_64-unknown-linux-gnu
 ARFLAGS_x86_64-unknown-linux-gnu = None
 cargo:rustc-link-lib=static=sqlite3
-cargo:rustc-link-search=native=/home/kbristol/.openclaw/workspace/repos/plures/plures-vault/target/debug/build/libsqlite3-sys-521366ba5fcfa714/out
-cargo:lib_dir=/home/kbristol/.openclaw/workspace/repos/plures/plures-vault/target/debug/build/libsqlite3-sys-521366ba5fcfa714/out
+cargo:rustc-link-search=native=/home/runner/work/plures-vault/plures-vault/target/debug/build/libsqlite3-sys-521366ba5fcfa714/out
+cargo:lib_dir=/home/runner/work/plures-vault/plures-vault/target/debug/build/libsqlite3-sys-521366ba5fcfa714/out
