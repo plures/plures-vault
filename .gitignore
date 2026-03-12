@@ -1,0 +1,37 @@
+# Rust build artifacts
+/target/
+**/target/
+Cargo.lock
+
+# Node / npm
+node_modules/
+**/node_modules/
+
+# SvelteKit build outputs
+/.svelte-kit/
+/build/
+**/.svelte-kit/
+**/build/
+
+# Tauri build outputs
+**/src-tauri/target/
+
+# Environment files
+.env
+.env.*
+!.env.example
+!.env.test
+
+# OS artifacts
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+
+# Editor directories
+.vscode/
+.idea/
+
+# Vite
+vite.config.js.timestamp-*
+vite.config.ts.timestamp-*
