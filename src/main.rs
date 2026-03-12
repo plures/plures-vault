@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use vault_core::{VaultManager, VaultError};
+use vault_core::VaultManager;
 use vault_sync::SyncManager;
 use anyhow::Result;
 use std::io::{self, Write};
@@ -61,6 +61,11 @@ enum Commands {
     Delete {
         #[arg(short, long)]
         name: String,
+    },
+    /// Search credentials by name, username, URL, or notes
+    Search {
+        #[arg(short, long)]
+        term: String,
     },
     /// Start P2P sync server
     StartSync {
@@ -270,6 +275,31 @@ async fn main() -> Result<()> {
                 println!("✅ Credential '{}' deleted successfully", name);
             } else {
                 println!("❌ Credential '{}' not found", name);
+            }
+        }
+
+        Commands::Search { term } => {
+            if !vault.is_unlocked() {
+                let password = prompt_password("Enter master password to unlock vault: ")?;
+                vault.unlock_vault(&password).await?;
+            }
+
+            println!("🔍 Searching credentials for: {}", term);
+            let results = vault.search_credentials(&term).await?;
+
+            if results.is_empty() {
+                println!("   (no credentials matched '{}'))", term);
+            } else {
+                println!("   Found {} result(s):", results.len());
+                for credential in &results {
+                    println!("   • {}", credential.name);
+                    if let Some(username) = &credential.username {
+                        println!("     Username: {}", username);
+                    }
+                    if let Some(url) = &credential.url {
+                        println!("     URL: {}", url);
+                    }
+                }
             }
         }
 

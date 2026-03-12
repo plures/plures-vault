@@ -21,6 +21,8 @@ pub enum VaultError {
     InvalidMasterPassword,
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
+    #[error("Validation error: {0}")]
+    ValidationError(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -31,6 +33,19 @@ pub struct Credential {
     pub password: String, // Always encrypted
     pub url: Option<String>,
     pub notes: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub version: u64,
+}
+
+/// A lightweight view of a credential that omits the decrypted password.
+/// Returned by `list_credentials` to avoid unnecessary decryption.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CredentialSummary {
+    pub id: Uuid,
+    pub name: String,
+    pub username: Option<String>,
+    pub url: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
     pub version: u64,
@@ -49,6 +64,29 @@ pub struct VaultManager {
     pool: SqlitePool,
     crypto: VaultCrypto,
     master_key: Option<MasterKey>,
+}
+
+fn validate_credential_name(name: &str) -> Result<(), VaultError> {
+    if name.trim().is_empty() {
+        return Err(VaultError::ValidationError(
+            "Credential name must not be empty".to_string(),
+        ));
+    }
+    if name.len() > 255 {
+        return Err(VaultError::ValidationError(
+            "Credential name must not exceed 255 characters".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_credential_password(password: &str) -> Result<(), VaultError> {
+    if password.is_empty() {
+        return Err(VaultError::ValidationError(
+            "Credential password must not be empty".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 impl VaultManager {
@@ -174,6 +212,9 @@ impl VaultManager {
         url: Option<String>,
         notes: Option<String>,
     ) -> Result<Credential> {
+        validate_credential_name(&name)?;
+        validate_credential_password(&password)?;
+
         let master_key = self.master_key.as_ref().ok_or(VaultError::VaultNotInitialized)?;
 
         // Encrypt the password
@@ -210,6 +251,8 @@ impl VaultManager {
         .execute(&self.pool)
         .await?;
 
+        eprintln!("[audit] credential added: name={}", name);
+
         Ok(credential)
     }
 
@@ -225,6 +268,8 @@ impl VaultManager {
             let encrypted_password_json: String = row.get("password");
             let encrypted_password: EncryptedData = serde_json::from_str(&encrypted_password_json)?;
             let decrypted_password = self.crypto.decrypt(master_key, &encrypted_password)?;
+
+            eprintln!("[audit] credential retrieved: name={}", name);
 
             Ok(Some(Credential {
                 id: Uuid::parse_str(&row.get::<String, _>("id"))?,
@@ -242,15 +287,53 @@ impl VaultManager {
         }
     }
 
-    pub async fn list_credentials(&self) -> Result<Vec<Credential>> {
+    /// Returns a lightweight summary of every credential (no password decryption).
+    pub async fn list_credentials(&self) -> Result<Vec<CredentialSummary>> {
+        let rows = sqlx::query(
+            "SELECT id, name, username, url, created_at, updated_at, version FROM credentials ORDER BY name",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+
+        let mut summaries = Vec::new();
+
+        for row in rows {
+            summaries.push(CredentialSummary {
+                id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                name: row.get("name"),
+                username: row.get("username"),
+                url: row.get("url"),
+                created_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("created_at"))?.with_timezone(&Utc),
+                updated_at: DateTime::parse_from_rfc3339(&row.get::<String, _>("updated_at"))?.with_timezone(&Utc),
+                version: row.get::<i64, _>("version") as u64,
+            });
+        }
+
+        Ok(summaries)
+    }
+
+    /// Search credentials by matching `term` against name, username, url, or notes.
+    /// Returns full decrypted credentials for matching entries.
+    pub async fn search_credentials(&self, term: &str) -> Result<Vec<Credential>> {
         let master_key = self.master_key.as_ref().ok_or(VaultError::VaultNotInitialized)?;
 
-        let rows = sqlx::query("SELECT * FROM credentials ORDER BY name")
-            .fetch_all(&self.pool)
-            .await?;
+        let pattern = format!("%{}%", term);
+        let rows = sqlx::query(
+            r#"
+            SELECT * FROM credentials
+            WHERE name LIKE ?1
+               OR username LIKE ?1
+               OR url LIKE ?1
+               OR notes LIKE ?1
+            ORDER BY name
+            "#,
+        )
+        .bind(&pattern)
+        .fetch_all(&self.pool)
+        .await?;
 
         let mut credentials = Vec::new();
-        
+
         for row in rows {
             let encrypted_password_json: String = row.get("password");
             let encrypted_password: EncryptedData = serde_json::from_str(&encrypted_password_json)?;
@@ -269,6 +352,8 @@ impl VaultManager {
             });
         }
 
+        eprintln!("[audit] credential search: term={:?}, results={}", term, credentials.len());
+
         Ok(credentials)
     }
 
@@ -278,7 +363,11 @@ impl VaultManager {
             .execute(&self.pool)
             .await?;
 
-        Ok(result.rows_affected() > 0)
+        let deleted = result.rows_affected() > 0;
+        if deleted {
+            eprintln!("[audit] credential deleted: name={}", name);
+        }
+        Ok(deleted)
     }
 
     pub async fn update_credential(
@@ -290,6 +379,10 @@ impl VaultManager {
         new_notes: Option<String>,
     ) -> Result<Option<Credential>> {
         let master_key = self.master_key.as_ref().ok_or(VaultError::VaultNotInitialized)?;
+
+        if let Some(ref pw) = new_password {
+            validate_credential_password(pw)?;
+        }
 
         // First check if credential exists
         let existing = self.get_credential(name).await?;
@@ -336,6 +429,8 @@ impl VaultManager {
         .execute(&self.pool)
         .await?;
 
+        eprintln!("[audit] credential updated: name={}, version={}", name, credential.version);
+
         Ok(Some(credential))
     }
 
@@ -368,5 +463,313 @@ impl VaultManager {
     pub async fn check_initialization(&self) -> Result<VaultMetadata> {
         // Same as get_vault_metadata but for backward compatibility
         self.get_vault_metadata().await
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Create an in-memory vault that is already initialised and unlocked.
+    async fn create_test_vault() -> VaultManager {
+        let mut vault = VaultManager::new(":memory:")
+            .await
+            .expect("failed to create in-memory vault");
+        vault
+            .init_vault("Test Vault", "test_password_123")
+            .await
+            .expect("failed to init vault");
+        vault
+    }
+
+    #[tokio::test]
+    async fn test_add_and_get_credential() {
+        let vault = create_test_vault().await;
+
+        let credential = vault
+            .add_credential(
+                "example.com".to_string(),
+                Some("user@example.com".to_string()),
+                "secret123".to_string(),
+                Some("https://example.com".to_string()),
+                None,
+            )
+            .await
+            .expect("add_credential failed");
+
+        assert_eq!(credential.name, "example.com");
+        assert_eq!(credential.version, 1);
+
+        let retrieved = vault
+            .get_credential("example.com")
+            .await
+            .expect("get_credential failed")
+            .expect("credential not found");
+
+        assert_eq!(retrieved.password, "secret123");
+        assert_eq!(retrieved.username, Some("user@example.com".to_string()));
+        assert_eq!(retrieved.url, Some("https://example.com".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_get_nonexistent_credential_returns_none() {
+        let vault = create_test_vault().await;
+
+        let result = vault
+            .get_credential("nonexistent")
+            .await
+            .expect("get_credential failed");
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_list_credentials() {
+        let vault = create_test_vault().await;
+
+        vault
+            .add_credential("site1".to_string(), None, "pass1".to_string(), None, None)
+            .await
+            .unwrap();
+        vault
+            .add_credential(
+                "site2".to_string(),
+                Some("user2".to_string()),
+                "pass2".to_string(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let list = vault.list_credentials().await.expect("list_credentials failed");
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].name, "site1");
+        assert_eq!(list[1].name, "site2");
+        assert_eq!(list[1].username, Some("user2".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_update_credential_password() {
+        let vault = create_test_vault().await;
+
+        vault
+            .add_credential(
+                "example.com".to_string(),
+                Some("user".to_string()),
+                "old_pass".to_string(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        let updated = vault
+            .update_credential(
+                "example.com",
+                None,
+                Some("new_pass".to_string()),
+                None,
+                None,
+            )
+            .await
+            .expect("update_credential failed")
+            .expect("credential not found after update");
+
+        assert_eq!(updated.version, 2);
+
+        let retrieved = vault
+            .get_credential("example.com")
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(retrieved.password, "new_pass");
+    }
+
+    #[tokio::test]
+    async fn test_update_credential_username_and_url() {
+        let vault = create_test_vault().await;
+
+        vault
+            .add_credential("example.com".to_string(), None, "pass".to_string(), None, None)
+            .await
+            .unwrap();
+
+        vault
+            .update_credential(
+                "example.com",
+                Some("newuser".to_string()),
+                None,
+                Some("https://example.com".to_string()),
+                None,
+            )
+            .await
+            .unwrap();
+
+        let retrieved = vault.get_credential("example.com").await.unwrap().unwrap();
+        assert_eq!(retrieved.username, Some("newuser".to_string()));
+        assert_eq!(retrieved.url, Some("https://example.com".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_delete_credential() {
+        let vault = create_test_vault().await;
+
+        vault
+            .add_credential("to_delete".to_string(), None, "pass".to_string(), None, None)
+            .await
+            .unwrap();
+
+        let deleted = vault
+            .delete_credential("to_delete")
+            .await
+            .expect("delete_credential failed");
+        assert!(deleted);
+
+        let retrieved = vault.get_credential("to_delete").await.unwrap();
+        assert!(retrieved.is_none());
+
+        // Deleting a non-existent credential should return false, not an error
+        let deleted_again = vault.delete_credential("to_delete").await.unwrap();
+        assert!(!deleted_again);
+    }
+
+    #[tokio::test]
+    async fn test_search_credentials() {
+        let vault = create_test_vault().await;
+
+        vault
+            .add_credential(
+                "github.com".to_string(),
+                Some("user@github.com".to_string()),
+                "pass1".to_string(),
+                Some("https://github.com".to_string()),
+                None,
+            )
+            .await
+            .unwrap();
+        vault
+            .add_credential(
+                "gitlab.com".to_string(),
+                Some("user@gitlab.com".to_string()),
+                "pass2".to_string(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        vault
+            .add_credential(
+                "google.com".to_string(),
+                Some("user@google.com".to_string()),
+                "pass3".to_string(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
+        // "git" should match github.com and gitlab.com
+        let results = vault.search_credentials("git").await.expect("search failed");
+        assert_eq!(results.len(), 2);
+
+        // Search by partial username
+        let results = vault
+            .search_credentials("user@github")
+            .await
+            .expect("search failed");
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "github.com");
+
+        // Search by URL
+        let results = vault
+            .search_credentials("https://github.com")
+            .await
+            .expect("search failed");
+        assert_eq!(results.len(), 1);
+
+        // Non-matching term
+        let results = vault.search_credentials("zzznomatch").await.unwrap();
+        assert!(results.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_search_by_notes() {
+        let vault = create_test_vault().await;
+
+        vault
+            .add_credential(
+                "example.com".to_string(),
+                None,
+                "pass".to_string(),
+                None,
+                Some("work account".to_string()),
+            )
+            .await
+            .unwrap();
+
+        let results = vault.search_credentials("work").await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].name, "example.com");
+    }
+
+    #[tokio::test]
+    async fn test_validation_empty_name() {
+        let vault = create_test_vault().await;
+        let result = vault
+            .add_credential("".to_string(), None, "pass".to_string(), None, None)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validation_whitespace_name() {
+        let vault = create_test_vault().await;
+        let result = vault
+            .add_credential("   ".to_string(), None, "pass".to_string(), None, None)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_validation_empty_password() {
+        let vault = create_test_vault().await;
+        let result = vault
+            .add_credential("test.com".to_string(), None, "".to_string(), None, None)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_update_nonexistent_credential_errors() {
+        let vault = create_test_vault().await;
+        let result = vault
+            .update_credential("nonexistent", None, Some("pass".to_string()), None, None)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_version_increments_on_update() {
+        let vault = create_test_vault().await;
+
+        vault
+            .add_credential("test.com".to_string(), None, "pass1".to_string(), None, None)
+            .await
+            .unwrap();
+
+        for expected_version in 2u64..=4 {
+            let updated = vault
+                .update_credential(
+                    "test.com",
+                    None,
+                    Some(format!("pass{}", expected_version)),
+                    None,
+                    None,
+                )
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(updated.version, expected_version);
+        }
     }
 }

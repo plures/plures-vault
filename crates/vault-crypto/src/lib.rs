@@ -146,20 +146,26 @@ mod tests {
     fn test_key_derivation_and_encryption() {
         let crypto = VaultCrypto::new();
         let password = "test_password_123";
-        
+
         // Derive master key
         let (master_key, salt) = crypto.derive_master_key(password, None).unwrap();
-        
+
         // Test encryption/decryption
         let plaintext = "secret credential data";
         let encrypted = crypto.encrypt(&master_key, plaintext).unwrap();
         let decrypted = crypto.decrypt(&master_key, &encrypted).unwrap();
-        
+
         assert_eq!(plaintext, decrypted);
-        
-        // Test password verification
-        let password_hash = format!("$argon2id$v=19$m=19456,t=2,p=1${}", salt);
-        let verified_key = crypto.verify_password(password, &salt, &password_hash);
+
+        // Build the full PHC hash string (salt + hash) required by verify_password
+        let salt_string = SaltString::from_b64(&salt).unwrap();
+        let full_hash = crypto
+            .argon2
+            .hash_password(password.as_bytes(), &salt_string)
+            .unwrap()
+            .to_string();
+
+        let verified_key = crypto.verify_password(password, &salt, &full_hash);
         assert!(verified_key.is_ok());
     }
 

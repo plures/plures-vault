@@ -1,0 +1,5 @@
+/target
+/vault-gui/src-tauri/target
+*.db
+*.db-shm
+*.db-wal
