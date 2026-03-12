@@ -12,13 +12,29 @@
   "app": {
     "windows": [
       {
+        "label": "main",
         "title": "Plures Vault",
         "width": 1200,
         "height": 800,
         "minWidth": 800,
         "minHeight": 600,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "visible": false,
+        "url": "/"
+      },
+      {
+        "label": "splash",
+        "title": "Plures Vault",
+        "width": 400,
+        "height": 300,
+        "resizable": false,
+        "decorations": false,
+        "alwaysOnTop": true,
+        "center": true,
+        "transparent": true,
+        "visible": true,
+        "url": "splash.html"
       }
     ],
     "security": {

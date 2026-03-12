@@ -1,4 +1,6 @@
 use tauri::{AppHandle, Manager, State};
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
 use vault_core::VaultManager;
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
@@ -283,6 +285,18 @@ async fn delete_credential(
     Ok(())
 }
 
+#[tauri::command]
+async fn close_splash(window: tauri::Window) {
+    // Close splashscreen
+    if let Some(splash) = window.get_webview_window("splash") {
+        splash.close().unwrap();
+    }
+    // Show main window
+    if let Some(main) = window.get_webview_window("main") {
+        main.show().unwrap();
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_state = AppState {
@@ -291,16 +305,68 @@ pub fn run() {
     };
 
     tauri::Builder::default()
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--minimized".to_string()])
+        ))
         .manage(app_state)
         .setup(|app| {
-            #[cfg(debug_assertions)]
-            {
-                let window = app.get_webview_window("main").unwrap();
-                let _ = window.open_devtools();
-            }
+            let show_i = MenuItem::with_id(app, "show", "Show Plures Vault", true, None::<&str>)?;
+            let lock_i = MenuItem::with_id(app, "lock", "Lock Vault", true, None::<&str>)?;
+            let quit_i = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let menu = Menu::with_items(app, &[&show_i, &lock_i, &quit_i])?;
+
+            let _tray = TrayIconBuilder::new()
+                .menu(&menu)
+                .icon(app.default_window_icon().unwrap().clone())
+                .on_menu_event(|app, event| match event.id.as_ref() {
+                    "quit" => {
+                        app.exit(0);
+                    }
+                    "show" => {
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                        }
+                    }
+                    "lock" => {
+                        // Emit event to lock the vault
+                        if let Some(window) = app.get_webview_window("main") {
+                            let _ = window.emit("vault-lock-requested", ());
+                        }
+                    }
+                    _ => {}
+                })
+                .on_tray_icon_event(|tray, event| {
+                    if let TrayIconEvent::Click {
+                        button: MouseButton::Left,
+                        button_state: MouseButtonState::Up,
+                        ..
+                    } = event {
+                        let app = tray.app_handle();
+                        if let Some(window) = app.get_webview_window("main") {
+                            // Toggle window visibility on left-click
+                            if window.is_visible().unwrap_or(false) {
+                                let _ = window.hide();
+                            } else {
+                                let _ = window.show();
+                                let _ = window.set_focus();
+                            }
+                        }
+                    }
+                })
+                .build(app)?;
+
             Ok(())
         })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                window.hide().unwrap();
+                api.prevent_close();
+            }
+        })
         .invoke_handler(tauri::generate_handler![
+            close_splash,
             check_vault_status,
             initialize_vault,
             unlock_vault,
