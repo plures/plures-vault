@@ -1,0 +1,104 @@
+name: QA Failure
+description: Report a QA pipeline failure that requires investigation
+labels: ["qa-failure", "needs-qa-review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This template is for documenting test failures and QA pipeline issues.
+        It is primarily used by the automated QA pipeline but can also be filed manually.
+
+  - type: dropdown
+    id: pipeline
+    attributes:
+      label: Failed Pipeline
+      description: Which QA pipeline or test suite failed?
+      options:
+        - CI — Unit Tests
+        - CI — Integration Tests
+        - CI — Code Coverage
+        - CI — Lint / Clippy
+        - Security Audit — cargo-audit
+        - Security Audit — Crypto Security Tests
+        - Security Audit — Unsafe Code Scan
+        - Performance Tests
+        - Cross-platform Tests (Linux)
+        - Cross-platform Tests (macOS)
+        - Cross-platform Tests (Windows)
+        - Manual QA Review
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: severity
+    attributes:
+      label: Severity
+      description: How critical is this failure?
+      options:
+        - Critical (security or data integrity)
+        - High (core functionality broken)
+        - Medium (non-critical test failure)
+        - Low (flaky test / intermittent failure)
+    validations:
+      required: true
+
+  - type: input
+    id: run_url
+    attributes:
+      label: Workflow Run URL
+      description: Link to the failing GitHub Actions run
+      placeholder: "https://github.com/plures/plures-vault/actions/runs/..."
+    validations:
+      required: false
+
+  - type: input
+    id: branch
+    attributes:
+      label: Branch / Commit
+      description: The branch and commit SHA where the failure occurred
+      placeholder: "main @ abc1234"
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Failure Description
+      description: Describe what failed and any relevant error output
+      placeholder: |
+        Test `test_credential_crud` failed with:
+        thread 'test_credential_crud' panicked at 'assertion failed: ...'
+    validations:
+      required: true
+
+  - type: textarea
+    id: impact
+    attributes:
+      label: Impact Assessment
+      description: What functionality is affected by this failure?
+      placeholder: "e.g. All credential CRUD operations are broken on Windows"
+    validations:
+      required: false
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      description: How can this failure be reproduced locally?
+      placeholder: |
+        1. `cargo test -p vault-core --test integration_test`
+        2. Observe failure in `test_credential_crud`
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Resolution Checklist
+      options:
+        - label: Root cause identified
+        - label: Fix implemented and tested
+        - label: Affected tests pass locally
+        - label: CI pipeline is green
+        - label: Regression test added to prevent recurrence

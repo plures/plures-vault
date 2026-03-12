@@ -1,0 +1,125 @@
+name: Security Audit
+
+on:
+  push:
+    branches: ["main", "develop"]
+  pull_request:
+    branches: ["main", "develop"]
+  schedule:
+    # Run every Monday at 08:00 UTC
+    - cron: "0 8 * * 1"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─── Dependency Vulnerability Audit ──────────────────────────────────────────
+  audit:
+    name: Dependency Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: Run cargo-audit
+        run: cargo audit --deny warnings
+
+  # ─── Cryptographic Implementation Tests ───────────────────────────────────────
+  crypto-security:
+    name: Crypto Security Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-security-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-security-
+
+      - name: Build crypto crate
+        run: cargo build -p vault-crypto
+
+      - name: Run crypto security tests
+        run: cargo test -p vault-crypto --test security_test -- --nocapture
+
+      - name: Run crypto unit tests
+        run: cargo test -p vault-crypto --lib -- --nocapture
+
+  # ─── Unsafe Code Scan ─────────────────────────────────────────────────────────
+  forbid-unsafe:
+    name: Forbid Unsafe Code
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check for unsafe code in crypto crate
+        run: |
+          UNSAFE_COUNT=$(grep -r 'unsafe' crates/vault-crypto/src/ | grep -v '//' | wc -l || echo "0")
+          echo "Unsafe code occurrences in vault-crypto: $UNSAFE_COUNT"
+          if [ "$UNSAFE_COUNT" -gt 0 ]; then
+            echo "❌ vault-crypto must not contain unsafe code blocks"
+            grep -rn 'unsafe' crates/vault-crypto/src/ | grep -v '//'
+            exit 1
+          fi
+          echo "✅ No unsafe code found in vault-crypto"
+
+  # ─── Auto-create Security Issue on Failure ────────────────────────────────────
+  create-security-issue:
+    name: Create Security Issue on Failure
+    runs-on: ubuntu-latest
+    needs: [audit, crypto-security, forbid-unsafe]
+    if: failure() && github.event_name != 'pull_request'
+    permissions:
+      issues: write
+    steps:
+      - name: Create security audit failure issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const failedJobs = [];
+            if ('${{ needs.audit.result }}' === 'failure') failedJobs.push('Dependency Audit');
+            if ('${{ needs.crypto-security.result }}' === 'failure') failedJobs.push('Crypto Security Tests');
+            if ('${{ needs.forbid-unsafe.result }}' === 'failure') failedJobs.push('Unsafe Code Scan');
+
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              '## 🔒 Security Audit Failure',
+              '',
+              `**Workflow Run:** [View Details](${runUrl})`,
+              `**Branch:** \`${context.ref.replace('refs/heads/', '')}\``,
+              `**Commit:** \`${context.sha.slice(0, 7)}\``,
+              `**Failed Jobs:** ${failedJobs.join(', ')}`,
+              '',
+              '### Action Required',
+              'A security check has failed and requires immediate review.',
+              'Please investigate the workflow run linked above and address the findings.',
+              '',
+              '### Checklist',
+              '- [ ] Review the failing security check output',
+              '- [ ] Identify and remediate the vulnerability or unsafe code',
+              '- [ ] Re-run the security workflow to verify the fix',
+              '- [ ] Update dependencies if required (`cargo update` + re-audit)',
+            ].join('\n');
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `🔒 Security Audit Failure — ${new Date().toISOString().slice(0, 10)}`,
+              body,
+              labels: ['security', 'critical', 'qa-automated'],
+            });

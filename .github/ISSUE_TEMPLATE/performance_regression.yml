@@ -1,0 +1,83 @@
+name: Performance Regression
+description: Report a performance regression detected in testing
+labels: ["performance", "regression", "needs-qa-review"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this template to report performance regressions detected by the automated
+        performance pipeline or during manual testing.
+
+  - type: dropdown
+    id: operation
+    attributes:
+      label: Affected Operation
+      description: Which operation regressed?
+      options:
+        - Credential encryption / decryption
+        - Add credential
+        - Get credential
+        - List credentials
+        - Vault initialisation
+        - Vault unlock (key derivation)
+        - Bulk operations (100+ credentials)
+        - Load testing (1000+ credentials)
+        - P2P sync
+        - Other
+    validations:
+      required: true
+
+  - type: input
+    id: baseline
+    attributes:
+      label: Expected / Baseline Performance
+      description: What was the previously acceptable performance?
+      placeholder: "e.g. List 1000 credentials in < 5 s"
+    validations:
+      required: true
+
+  - type: input
+    id: actual
+    attributes:
+      label: Actual Performance
+      description: What is the measured performance after the regression?
+      placeholder: "e.g. List 1000 credentials takes ~12 s"
+    validations:
+      required: true
+
+  - type: input
+    id: run_url
+    attributes:
+      label: Workflow Run URL
+      description: Link to the performance test workflow run
+      placeholder: "https://github.com/plures/plures-vault/actions/runs/..."
+    validations:
+      required: false
+
+  - type: input
+    id: commit
+    attributes:
+      label: Regression Introduced In
+      description: The commit or PR that introduced the regression (if known)
+      placeholder: "abc1234 or #42"
+    validations:
+      required: false
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: Describe the regression and its impact
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: checklist
+    attributes:
+      label: Resolution Checklist
+      options:
+        - label: Regression confirmed and reproduced locally
+        - label: Root cause identified (profiling done)
+        - label: Fix implemented
+        - label: Performance tests pass within thresholds
+        - label: Thresholds updated in test file if justified (with documentation)

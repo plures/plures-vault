@@ -105,7 +105,7 @@ impl VaultCrypto {
 
         Ok(EncryptedData {
             ciphertext: general_purpose::STANDARD.encode(&ciphertext),
-            nonce: general_purpose::STANDARD.encode(&nonce),
+            nonce: general_purpose::STANDARD.encode(nonce),
         })
     }
 
@@ -157,8 +157,10 @@ mod tests {
         
         assert_eq!(plaintext, decrypted);
         
-        // Test password verification
-        let password_hash = format!("$argon2id$v=19$m=19456,t=2,p=1${}", salt);
+        // Build a proper argon2 hash string for verification testing.
+        use argon2::{password_hash::SaltString, PasswordHasher};
+        let salt_str = SaltString::from_b64(&salt).unwrap();
+        let password_hash = crypto.argon2.hash_password(password.as_bytes(), &salt_str).unwrap().to_string();
         let verified_key = crypto.verify_password(password, &salt, &password_hash);
         assert!(verified_key.is_ok());
     }
@@ -170,7 +172,11 @@ mod tests {
         let wrong_password = "wrong_password";
         
         let (_, salt) = crypto.derive_master_key(password, None).unwrap();
-        let password_hash = format!("$argon2id$v=19$m=19456,t=2,p=1${}", salt);
+
+        // Build a proper argon2 hash string.
+        use argon2::{password_hash::SaltString, PasswordHasher};
+        let salt_str = SaltString::from_b64(&salt).unwrap();
+        let password_hash = crypto.argon2.hash_password(password.as_bytes(), &salt_str).unwrap().to_string();
         
         let result = crypto.verify_password(wrong_password, &salt, &password_hash);
         assert!(result.is_err());

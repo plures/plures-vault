@@ -1,0 +1,116 @@
+# QA Label Taxonomy for Plures Vault
+# Managed via .github/workflows/labels.yml
+
+# ─── Type Labels ──────────────────────────────────────────────────────────────
+- name: bug
+  color: "d73a4a"
+  description: Something is not working correctly
+
+- name: enhancement
+  color: "a2eeef"
+  description: New feature or improvement request
+
+- name: security
+  color: "e11d48"
+  description: Security-related issue or change
+
+- name: performance
+  color: "f97316"
+  description: Performance issue or improvement
+
+- name: documentation
+  color: "0075ca"
+  description: Documentation improvements or corrections
+
+# ─── Priority Labels ──────────────────────────────────────────────────────────
+- name: critical
+  color: "b91c1c"
+  description: Critical severity — requires immediate attention
+
+- name: high
+  color: "dc2626"
+  description: High priority issue
+
+- name: medium
+  color: "f59e0b"
+  description: Medium priority issue
+
+- name: low
+  color: "84cc16"
+  description: Low priority issue
+
+# ─── QA Labels ────────────────────────────────────────────────────────────────
+- name: qa-automated
+  color: "7c3aed"
+  description: Automatically created by the QA pipeline
+
+- name: qa-failure
+  color: "6d28d9"
+  description: Issue created from a CI/CD test failure
+
+- name: regression
+  color: "c026d3"
+  description: A regression in previously working functionality
+
+- name: needs-security-review
+  color: "991b1b"
+  description: Change requires manual security review before merge
+
+- name: needs-qa-review
+  color: "1d4ed8"
+  description: Change requires manual QA validation
+
+# ─── Status Labels ────────────────────────────────────────────────────────────
+- name: in-progress
+  color: "2563eb"
+  description: Currently being worked on
+
+- name: blocked
+  color: "6b7280"
+  description: Blocked by another issue or external dependency
+
+- name: needs-repro
+  color: "9ca3af"
+  description: Needs reproduction steps or confirmation
+
+- name: wont-fix
+  color: "e5e7eb"
+  description: This issue will not be addressed
+
+# ─── Scope Labels ─────────────────────────────────────────────────────────────
+- name: scope:crypto
+  color: "065f46"
+  description: Affects the vault-crypto crate
+
+- name: scope:core
+  color: "0f766e"
+  description: Affects the vault-core crate
+
+- name: scope:sync
+  color: "0e7490"
+  description: Affects the vault-sync crate
+
+- name: scope:cli
+  color: "1e40af"
+  description: Affects the CLI interface
+
+- name: scope:gui
+  color: "3730a3"
+  description: Affects the Tauri/Svelte GUI
+
+- name: scope:ci
+  color: "374151"
+  description: Affects the CI/CD pipeline
+
+# ─── Platform Labels ──────────────────────────────────────────────────────────
+- name: platform:linux
+  color: "166534"
+  description: Linux-specific issue
+
+- name: platform:macos
+  color: "1c1917"
+  description: macOS-specific issue
+
+- name: platform:windows
+  color: "1e3a5f"
+  description: Windows-specific issue

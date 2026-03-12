@@ -88,6 +88,7 @@ pub struct SyncManager {
     local_clock: Arc<Mutex<u64>>,
     vault_id: Uuid,
     local_peer_id: Uuid,
+    #[allow(dead_code)] // Reserved for Phase 2: bound listener handle
     listener: Option<TcpListener>,
 }
 

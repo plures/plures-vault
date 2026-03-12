@@ -1,0 +1,109 @@
+name: Performance Tests
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main", "develop"]
+  schedule:
+    # Run every Wednesday at 08:00 UTC
+    - cron: "0 8 * * 3"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─── Performance Benchmarks ───────────────────────────────────────────────────
+  performance:
+    name: Performance Tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-perf-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-perf-
+
+      - name: Build release binaries
+        run: cargo build --release --all
+
+      - name: Run performance tests
+        run: |
+          cargo test -p vault-core --test performance_test --release -- --nocapture \
+            2>&1 | tee /tmp/perf_output.txt
+
+      - name: Check for threshold violations
+        run: |
+          if grep -q 'PERFORMANCE REGRESSION' /tmp/perf_output.txt; then
+            echo "❌ Performance regression detected"
+            cat /tmp/perf_output.txt
+            exit 1
+          fi
+          echo "✅ All performance thresholds met"
+
+      - name: Upload performance results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-results-${{ github.run_number }}
+          path: /tmp/perf_output.txt
+          retention-days: 30
+
+  # ─── Auto-create Performance Regression Issue ─────────────────────────────────
+  create-regression-issue:
+    name: Create Regression Issue on Failure
+    runs-on: ubuntu-latest
+    needs: [performance]
+    if: failure() && github.event_name != 'pull_request'
+    permissions:
+      issues: write
+    steps:
+      - name: Create performance regression issue
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const runUrl = `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              '## 📉 Performance Regression Detected',
+              '',
+              `**Workflow Run:** [View Details](${runUrl})`,
+              `**Branch:** \`${context.ref.replace('refs/heads/', '')}\``,
+              `**Commit:** \`${context.sha.slice(0, 7)}\``,
+              '',
+              '### Description',
+              'One or more performance benchmarks have exceeded their acceptable thresholds.',
+              'Please review the workflow run output and investigate the regression.',
+              '',
+              '### Acceptance Thresholds',
+              '| Operation | Threshold |',
+              '|-----------|-----------|',
+              '| Encrypt 1 credential | < 100 ms |',
+              '| Add 100 credentials | < 10 s |',
+              '| Add 1 000 credentials | < 60 s |',
+              '| List 1 000 credentials | < 5 s |',
+              '| Get single credential | < 500 ms |',
+              '',
+              '### Checklist',
+              '- [ ] Review performance test output in the linked workflow run',
+              '- [ ] Profile the affected code path',
+              '- [ ] Implement performance fix',
+              '- [ ] Re-run performance tests to verify improvement',
+              '- [ ] Update thresholds if new baseline is justified and documented',
+            ].join('\n');
+
+            await github.rest.issues.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `📉 Performance Regression — ${new Date().toISOString().slice(0, 10)}`,
+              body,
+              labels: ['performance', 'regression', 'qa-automated'],
+            });

@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use vault_core::{VaultManager, VaultError};
+use vault_core::VaultManager;
 use vault_sync::SyncManager;
 use anyhow::Result;
 use std::io::{self, Write};

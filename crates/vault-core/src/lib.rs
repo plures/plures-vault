@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
 use sqlx::{SqlitePool, Row};
+use sqlx::sqlite::SqliteConnectOptions;
+use std::str::FromStr;
 use anyhow::Result;
 use thiserror::Error;
 
@@ -54,7 +56,8 @@ pub struct VaultManager {
 impl VaultManager {
     pub async fn new(database_path: &str) -> Result<Self> {
         let database_url = format!("sqlite:{}", database_path);
-        let pool = SqlitePool::connect(&database_url).await?;
+        let opts = SqliteConnectOptions::from_str(&database_url)?.create_if_missing(true);
+        let pool = SqlitePool::connect_with(opts).await?;
         
         // Create tables if they don't exist
         sqlx::query(
