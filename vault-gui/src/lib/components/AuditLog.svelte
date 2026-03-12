@@ -16,22 +16,24 @@
 	let filterSeverity = $state<'all' | 'info' | 'warning' | 'critical'>('all');
 	let filterText = $state('');
 
-	const filtered = $derived(() => {
-		let result = entries;
-		if (filterSeverity !== 'all') {
-			result = result.filter((e) => e.severity === filterSeverity);
-		}
-		if (filterText.trim()) {
-			const q = filterText.toLowerCase();
-			result = result.filter(
-				(e) =>
-					e.action.toLowerCase().includes(q) ||
-					e.credentialName?.toLowerCase().includes(q) ||
-					e.partition?.toLowerCase().includes(q)
-			);
-		}
-		return result.slice(0, maxVisible);
-	});
+	const filtered = $derived(
+		(() => {
+			let result = entries;
+			if (filterSeverity !== 'all') {
+				result = result.filter((e) => e.severity === filterSeverity);
+			}
+			if (filterText.trim()) {
+				const q = filterText.toLowerCase();
+				result = result.filter(
+					(e) =>
+						e.action.toLowerCase().includes(q) ||
+						e.credentialName?.toLowerCase().includes(q) ||
+						e.partition?.toLowerCase().includes(q)
+				);
+			}
+			return result.slice(0, maxVisible);
+		})()
+	);
 
 	const severityIcon: Record<PraxisAction['severity'], string> = {
 		info: '🔵',
@@ -81,14 +83,14 @@
 			<span aria-hidden="true">📋</span>
 			<p>No audit entries yet. Actions will appear here as you use the vault.</p>
 		</div>
-	{:else if filtered().length === 0}
+	{:else if filtered.length === 0}
 		<div class="empty-state">
 			<span aria-hidden="true">🔍</span>
 			<p>No entries match your filter.</p>
 		</div>
 	{:else}
 		<ol class="entry-list" aria-label="Audit entries, newest first">
-			{#each filtered() as entry (entry.id)}
+			{#each filtered as entry (entry.id)}
 				<li
 					class="entry"
 					class:entry--warning={entry.severity === 'warning'}

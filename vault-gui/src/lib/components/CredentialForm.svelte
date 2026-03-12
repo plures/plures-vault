@@ -16,18 +16,19 @@
 
 	let { initial = {}, mode = 'add', onsubmit, oncancel }: Props = $props();
 
-	// Capturing initial prop values in $state is intentional here —
-	// this dialog is always mounted fresh per credential (key'd by id in parent).
-	// eslint-disable-next-line svelte/state_referenced_locally
+	/*
+	 * These $state initializations intentionally capture only the initial value of the
+	 * `initial` prop. This is correct behaviour: CredentialForm is always keyed by
+	 * credential ID in the parent, so it is destroyed and re-created for each edit
+	 * session — the snapshot on mount is exactly what we want.
+	 */
+	/* eslint-disable svelte/state_referenced_locally */
 	let name = $state(initial.name ?? '');
-	// eslint-disable-next-line svelte/state_referenced_locally
 	let username = $state(initial.username ?? '');
-	// eslint-disable-next-line svelte/state_referenced_locally
 	let password = $state(initial.password ?? '');
-	// eslint-disable-next-line svelte/state_referenced_locally
 	let url = $state(initial.url ?? '');
-	// eslint-disable-next-line svelte/state_referenced_locally
 	let notes = $state(initial.notes ?? '');
+	/* eslint-enable svelte/state_referenced_locally */
 
 	let isLoading = $state(false);
 	let error = $state('');

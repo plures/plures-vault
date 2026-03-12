@@ -50,6 +50,7 @@
 			{placeholder}
 			{disabled}
 			autocomplete={autocomplete as 'current-password' | 'new-password' | 'off'}
+			autofocus={autofocus || undefined}
 			oninput={handleInput}
 			class="input"
 			aria-describedby={showStrength ? `${id}-strength` : undefined}

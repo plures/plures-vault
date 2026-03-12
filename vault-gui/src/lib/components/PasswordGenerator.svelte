@@ -55,10 +55,12 @@
 		if (generated) ongenerate?.(generated);
 	}
 
-	// Auto-generate on mount and when options change
+	// Auto-generate on mount and whenever any option changes.
+	// $effect tracks all reactive reads inside its body — reading each variable
+	// is sufficient to register the dependency.
 	$effect(() => {
-		// Dependencies: length, useUppercase, useLowercase, useNumbers, useSymbols
-		length; useUppercase; useLowercase; useNumbers; useSymbols;
+		const _deps = [length, useUppercase, useLowercase, useNumbers, useSymbols];
+		void _deps; // consumed to satisfy linters
 		generate();
 	});
 </script>

@@ -5,7 +5,7 @@
 		credentials?: CredentialData[];
 		onadd?: () => void;
 		onedit?: (id: string) => void;
-		ondelete?: (id: string) => void;
+		ondelete?: (id: string, name: string) => void;
 		oncopypassword?: (id: string, name: string) => void;
 		oncopyusername?: (id: string, name: string) => void;
 	}
@@ -45,8 +45,9 @@
 								alt=""
 								width="20"
 								height="20"
+								class="favicon"
 								onerror={(e) => {
-									(e.currentTarget as HTMLImageElement).style.display = 'none';
+									(e.currentTarget as HTMLImageElement).hidden = true;
 								}}
 							/>
 						{:else}
@@ -97,7 +98,7 @@
 					</button>
 					<button
 						class="action-btn action-btn--danger"
-						onclick={() => ondelete?.(credential.id!)}
+						onclick={() => ondelete?.(credential.id!, credential.name)}
 						title="Delete credential"
 						aria-label="Delete {credential.name}"
 					>

@@ -47,7 +47,9 @@
 				await vaultAPI.unlock(password);
 				praxisState.log('vault.unlocked');
 			}
-			vaultState.status = { ...vaultState.status!, unlocked: true };
+			vaultState.status = vaultState.status
+				? { ...vaultState.status, unlocked: true }
+				: { initialized: true, unlocked: true };
 			await loadCredentials();
 		} catch (e) {
 			praxisState.log('vault.unlock_failed', {
@@ -103,13 +105,12 @@
 		vaultState.editingCredentialId = null;
 	}
 
-	async function handleDeleteCredential(id: string) {
+	async function handleDeleteCredential(id: string, name: string) {
 		if (!confirm('Are you sure you want to delete this credential?')) return;
-		const cred = vaultState.credentials.find((c) => c.id === id);
 		await vaultAPI.deleteCredential(id);
 		praxisState.log('credential.deleted', {
 			credentialId: id,
-			credentialName: cred?.name,
+			credentialName: name,
 			partition: vaultState.currentPartition,
 		});
 		await loadCredentials();
