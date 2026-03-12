@@ -6,7 +6,7 @@ use tokio::sync::RwLock;
 use chrono::{DateTime, Utc, Duration};
 
 /// Azure AD OAuth2 token response.
-#[derive(Debug, Deserialize)]
+#[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
     expires_in: u64,
@@ -14,10 +14,19 @@ struct TokenResponse {
 }
 
 /// Cached access token with expiry tracking.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct CachedToken {
     access_token: String,
     expires_at: DateTime<Utc>,
+}
+
+impl std::fmt::Debug for CachedToken {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedToken")
+            .field("access_token", &"[REDACTED]")
+            .field("expires_at", &self.expires_at)
+            .finish()
+    }
 }
 
 impl CachedToken {
@@ -28,7 +37,7 @@ impl CachedToken {
 }
 
 /// Azure AD configuration required for authentication.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct AzureAdConfig {
     /// Azure Active Directory tenant ID (GUID or domain).
     pub tenant_id: String,
@@ -36,6 +45,16 @@ pub struct AzureAdConfig {
     pub client_id: String,
     /// Client secret for the registered application.
     pub client_secret: String,
+}
+
+impl std::fmt::Debug for AzureAdConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AzureAdConfig")
+            .field("tenant_id", &self.tenant_id)
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Azure AD authenticator using the client credentials OAuth2 flow.
