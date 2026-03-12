@@ -38,6 +38,9 @@ pub struct SecretListItem {
     pub enabled: bool,
     /// Optional content type.
     pub content_type: Option<String>,
+    /// Version identifier extracted from the secret `id` URL, if present.
+    /// Azure returns the latest version URL in the list response.
+    pub version: Option<String>,
 }
 
 // ── Raw Azure Key Vault response shapes ───────────────────────────────────────
@@ -88,7 +91,7 @@ struct RawErrorDetail {
     message: String,
 }
 
-// ── Helper: parse secret name from URL ────────────────────────────────────────
+// ── Helper: parse secret name / version from URL ─────────────────────────────
 
 /// Extracts the secret name from an Azure secret id URL.
 ///
@@ -101,6 +104,21 @@ fn secret_name_from_url(url: &str) -> String {
         .next()
         .unwrap_or(url)
         .to_string()
+}
+
+/// Extracts the version identifier from an Azure secret id URL, if present.
+///
+/// Returns `None` when the URL contains only a name and no version segment.
+fn version_from_url(url: &str) -> Option<String> {
+    let after_secrets = url.split("/secrets/").nth(1)?;
+    let mut parts = after_secrets.split('/');
+    let _name = parts.next()?; // skip name
+    let version = parts.next()?;
+    if version.is_empty() {
+        None
+    } else {
+        Some(version.to_string())
+    }
 }
 
 // ── Azure Key Vault client ─────────────────────────────────────────────────────
@@ -299,10 +317,15 @@ impl AzureKeyVaultClient {
 
             let raw: RawListResponse = response.json().await.map_err(AzureError::HttpError)?;
             for item in raw.value {
+                // The list API returns URLs of the form
+                // https://<vault>.vault.azure.net/secrets/<name>/<version>
+                // We extract both the name and, if present, the version.
+                let version = version_from_url(&item.id);
                 results.push(SecretListItem {
                     name: secret_name_from_url(&item.id),
                     enabled: item.attributes.enabled,
                     content_type: item.content_type,
+                    version,
                 });
             }
             next_url = raw.next_link;
@@ -326,6 +349,9 @@ impl AzureKeyVaultClient {
         let created_at = raw
             .attributes
             .created
+            // Azure timestamps are Unix seconds; an invalid/zero timestamp
+            // maps to DateTime::UNIX_EPOCH (1970-01-01T00:00:00Z), which is a
+            // safe sentinel value indicating an unknown creation time.
             .map(|ts| DateTime::from_timestamp(ts, 0).unwrap_or_default());
         let updated_at = raw
             .attributes

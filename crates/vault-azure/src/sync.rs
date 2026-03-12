@@ -290,8 +290,12 @@ impl<P: LocalSecretProvider> AzureKvSyncManager<P> {
                 self.pull_secret(name).await?;
             }
             ConflictResolution::HigherVersionWins => {
-                // Parse the remote version hex prefix as a u64 for comparison
-                let remote_ver = u64::from_str_radix(&remote_version[..8.min(remote_version.len())], 16)
+                // Azure KV version identifiers are 32-character hex strings.
+                // We take up to the first 8 hex digits (32 bits) as a u64 for
+                // a fast, best-effort ordering.  An empty or non-hex version
+                // string falls back to 0, which causes the local copy to win.
+                let prefix_len = remote_version.len().min(8);
+                let remote_ver = u64::from_str_radix(&remote_version[..prefix_len], 16)
                     .unwrap_or(0);
                 if local_version >= remote_ver {
                     self.push_secret(name, local_value).await?;
@@ -300,8 +304,10 @@ impl<P: LocalSecretProvider> AzureKvSyncManager<P> {
                 }
             }
             ConflictResolution::LastWriteWins => {
+                // When no remote timestamp is available we cannot determine
+                // which copy is newer, so we conservatively keep the local copy.
+                // UNIX_EPOCH acts as a "definitely older than now" sentinel.
                 let remote_ts = remote_updated_at.unwrap_or(DateTime::UNIX_EPOCH);
-                // Without local timestamp, fall back to local winning
                 if Utc::now() >= remote_ts {
                     self.push_secret(name, local_value).await?;
                 } else {
@@ -369,9 +375,16 @@ impl<P: LocalSecretProvider> AzureKvSyncManager<P> {
             let record = self.records.get(name);
 
             let outcome = if let Some(remote) = remote_index.get(name) {
+                // Compare the cached remote version with the current remote version
+                // from the list response.  `remote.version` is extracted from the
+                // secret's id URL by the Azure KV client.
                 let last_known_remote = record.and_then(|r| r.remote_version.as_deref());
-                if last_known_remote == Some(remote.name.as_str()) {
-                    // Remote version has not changed since last sync → push if dirty
+                let current_remote_version = remote.version.as_deref();
+
+                if last_known_remote.is_some()
+                    && last_known_remote == current_remote_version
+                {
+                    // Remote version has not changed since last sync → push only if dirty
                     let is_dirty = record.map(|r| r.dirty).unwrap_or(true);
                     if is_dirty {
                         self.push_secret(name, value).await
@@ -379,9 +392,15 @@ impl<P: LocalSecretProvider> AzureKvSyncManager<P> {
                         Ok(SyncOutcome::NoChange { name: name.clone() })
                     }
                 } else {
-                    // Remote changed since last sync → conflict
-                    self.resolve_conflict(name, value, *local_version, &remote.name, None)
-                        .await
+                    // Remote version changed (or unknown) since last sync → conflict
+                    self.resolve_conflict(
+                        name,
+                        value,
+                        *local_version,
+                        current_remote_version.unwrap_or(""),
+                        None,
+                    )
+                    .await
                 }
             } else {
                 // Secret not in Azure KV yet → push

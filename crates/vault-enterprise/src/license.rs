@@ -347,7 +347,7 @@ mod tests {
 
         let result = mgr.load_license(lic);
         assert!(result.is_err());
-        matches!(result.unwrap_err(), EnterpriseError::InvalidLicense(_));
+        assert!(matches!(result.unwrap_err(), EnterpriseError::InvalidLicense(_)));
     }
 
     #[test]
