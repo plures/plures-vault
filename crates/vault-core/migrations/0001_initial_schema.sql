@@ -1,8 +1,8 @@
--- PluresDB Schema for Encrypted Credentials
+-- SQLite Schema for Encrypted Credentials (vault-core / SQLx)
 -- Migration 0001: Initial schema
 
 -- vault_config: stores vault configuration and key derivation parameters.
--- There is exactly one row per database (single-vault model).
+-- Enforces single-row semantics via a constant primary key (id = 1).
 CREATE TABLE IF NOT EXISTS vault_config (
     id INTEGER PRIMARY KEY CHECK (id = 1) DEFAULT 1,
     vault_id TEXT NOT NULL,

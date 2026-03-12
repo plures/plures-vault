@@ -21,6 +21,8 @@ pub enum VaultError {
     CredentialNotFound(String),
     #[error("Vault not initialized")]
     VaultNotInitialized,
+    #[error("Vault already initialized")]
+    VaultAlreadyInitialized,
     #[error("Invalid master password")]
     InvalidMasterPassword,
     #[error("Serialization error: {0}")]
@@ -157,10 +159,7 @@ impl VaultManager {
                 .fetch_one(&self.pool)
                 .await?;
         if count > 0 {
-            return Err(VaultError::DatabaseError(sqlx::Error::Protocol(
-                "Vault already initialized".to_string(),
-            ))
-            .into());
+            return Err(VaultError::VaultAlreadyInitialized.into());
         }
 
         // Derive master key (new random salt) and store the full Argon2 hash.
@@ -181,8 +180,8 @@ impl VaultManager {
 
         sqlx::query(
             r#"
-            INSERT INTO vault_config (vault_id, version, vault_name, salt, key_derivation_params, password_hash, created_at)
-            VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO vault_config (id, vault_id, version, vault_name, salt, key_derivation_params, password_hash, created_at)
+            VALUES (1, ?1, 1, ?2, ?3, ?4, ?5, ?6)
             "#,
         )
         .bind(vault_id.to_string())
@@ -231,7 +230,7 @@ impl VaultManager {
 
     /// Return the vault configuration (does not require unlock).
     pub async fn get_vault_config(&self) -> Result<VaultConfig> {
-        let row = sqlx::query("SELECT vault_id, version, vault_name, salt, key_derivation_params, created_at FROM vault_config LIMIT 1")
+        let row = sqlx::query("SELECT vault_id, version, vault_name, salt, key_derivation_params, created_at FROM vault_config WHERE id = 1")
             .fetch_optional(&self.pool)
             .await?
             .ok_or(VaultError::VaultNotInitialized)?;
@@ -591,13 +590,19 @@ impl VaultManager {
                 .fetch_optional(&self.pool)
                 .await?;
 
-        Ok(row.map(|r| SyncMetadata {
-            credential_id: *credential_id,
-            last_sync: DateTime::parse_from_rfc3339(&r.get::<String, _>("last_sync"))
-                .unwrap()
-                .with_timezone(&Utc),
-            sync_hash: r.get("sync_hash"),
-        }))
+        if let Some(r) = row {
+            let last_sync_str: String = r.get("last_sync");
+            let last_sync = DateTime::parse_from_rfc3339(&last_sync_str)
+                .map_err(|e| VaultError::MigrationError(format!("Invalid last_sync timestamp: {}", e)))?
+                .with_timezone(&Utc);
+            Ok(Some(SyncMetadata {
+                credential_id: *credential_id,
+                last_sync,
+                sync_hash: r.get("sync_hash"),
+            }))
+        } else {
+            Ok(None)
+        }
     }
 
     // ── Private helpers ───────────────────────────────────────────────────────
@@ -665,7 +670,7 @@ impl VaultManager {
 
     async fn fetch_password_hash(&self) -> Result<String, VaultError> {
         let hash: String =
-            sqlx::query_scalar("SELECT password_hash FROM vault_config LIMIT 1")
+            sqlx::query_scalar("SELECT password_hash FROM vault_config WHERE id = 1")
                 .fetch_optional(&self.pool)
                 .await?
                 .ok_or(VaultError::VaultNotInitialized)?;
@@ -727,11 +732,17 @@ async fn migrate_legacy_vault_config(pool: &SqlitePool) -> Result<()> {
     if let Some(row) = row {
         let params = KeyDerivationParams::default();
         let params_json = serde_json::to_string(&params)?;
-        let vault_id = Uuid::new_v4();
+        // Prefer the legacy vault_metadata.id to keep sync identity stable.
+        // Fall back to a new UUID only if the legacy ID is missing or invalid.
+        let vault_id = row
+            .try_get::<String, _>("id")
+            .ok()
+            .and_then(|legacy_id| Uuid::parse_str(&legacy_id).ok())
+            .unwrap_or_else(Uuid::new_v4);
         sqlx::query(
             r#"
-            INSERT INTO vault_config (vault_id, version, vault_name, salt, key_derivation_params, password_hash, created_at)
-            VALUES (?1, 1, ?2, ?3, ?4, ?5, ?6)
+            INSERT INTO vault_config (id, vault_id, version, vault_name, salt, key_derivation_params, password_hash, created_at)
+            VALUES (1, ?1, 1, ?2, ?3, ?4, ?5, ?6)
             "#,
         )
         .bind(vault_id.to_string())
@@ -761,7 +772,7 @@ async fn migrate_legacy_credentials(pool: &SqlitePool) -> Result<()> {
         return Ok(());
     }
 
-    // Only attempt migration when the new-schema table is empty.
+    // Only attempt migration when the new-schema table does not exist yet.
     let new_count: i64 = sqlx::query_scalar(
         "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='credentials_v2'",
     )
@@ -771,7 +782,10 @@ async fn migrate_legacy_credentials(pool: &SqlitePool) -> Result<()> {
         return Ok(());
     }
 
-    // Create a temporary new-schema table, populate it, then swap.
+    // Wrap the entire table-swap in a transaction to prevent data loss if a
+    // crash or error occurs between the DROP and RENAME steps.
+    let mut tx = pool.begin().await?;
+
     sqlx::query(
         r#"
         CREATE TABLE credentials_v2 (
@@ -786,7 +800,7 @@ async fn migrate_legacy_credentials(pool: &SqlitePool) -> Result<()> {
         )
         "#,
     )
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     for row in &rows {
@@ -807,17 +821,18 @@ async fn migrate_legacy_credentials(pool: &SqlitePool) -> Result<()> {
         .bind(row.get::<Option<String>, _>("url"))
         .bind(row.get::<String, _>("created_at"))
         .bind(row.get::<String, _>("updated_at"))
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
     }
 
-    // Swap tables (SQLite does not support DROP + RENAME in a single statement,
-    // but we can do it without a transaction wrapping both since we already have one).
-    sqlx::query("DROP TABLE credentials").execute(pool).await?;
+    sqlx::query("DROP TABLE credentials")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("ALTER TABLE credentials_v2 RENAME TO credentials")
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
+    tx.commit().await?;
     Ok(())
 }
 
@@ -891,19 +906,24 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_lock_prevents_credential_access() {
-        let vault = init_vault().await;
+    async fn test_locked_vault_denies_credential_access() {
+        let mut vault = init_vault().await;
         vault
             .add_credential("cred".into(), None, "pass".into(), None, None)
             .await
             .unwrap();
 
-        let vault2 = create_vault().await;
-        // Not unlocked — any credential operation must fail.
-        assert!(vault2
+        // Lock the same vault instance.
+        vault.lock();
+        assert!(!vault.is_unlocked());
+
+        // All credential operations must fail while the vault is locked.
+        assert!(vault
             .add_credential("x".into(), None, "y".into(), None, None)
             .await
             .is_err());
+        assert!(vault.get_credential("cred").await.is_err());
+        assert!(vault.list_credentials().await.is_err());
     }
 
     // ── Credential CRUD tests ─────────────────────────────────────────────────
