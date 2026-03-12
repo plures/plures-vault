@@ -4,13 +4,15 @@
 -- vault_config: stores vault configuration and key derivation parameters.
 -- There is exactly one row per database (single-vault model).
 CREATE TABLE IF NOT EXISTS vault_config (
+    id INTEGER PRIMARY KEY CHECK (id = 1) DEFAULT 1,
     vault_id TEXT NOT NULL,
     version INTEGER NOT NULL DEFAULT 1,
     vault_name TEXT NOT NULL,
     salt TEXT NOT NULL,
     key_derivation_params TEXT NOT NULL, -- JSON: {"algorithm","m_cost","t_cost","p_cost"}
     password_hash TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    UNIQUE (vault_id)
 );
 
 -- credentials: stores encrypted credential entries.
