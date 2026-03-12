@@ -1,7 +1,7 @@
 use tauri::{AppHandle, Manager, State};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
-use vault_core::VaultManager;
+use vault_core::{VaultManager, AuditEntryRequest};
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
@@ -28,6 +28,30 @@ pub struct VaultStatus {
     pub vault_name: Option<String>,
 }
 
+/// Praxis audit entry – mirrors vault_core::AuditEntry for the Tauri IPC layer.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuditEntryPayload {
+    pub action: String,
+    pub severity: String,
+    pub partition: Option<String>,
+    pub credential_name: Option<String>,
+    pub details: Option<String>,
+    pub success: bool,
+    pub error_message: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AuditEntryResponse {
+    pub id: String,
+    pub action: String,
+    pub severity: String,
+    pub timestamp: String,
+    pub partition: Option<String>,
+    pub credential_name: Option<String>,
+    pub details: Option<String>,
+    pub success: bool,
+    pub error_message: Option<String>,
+}
 #[tauri::command]
 async fn check_vault_status(
     _app: AppHandle,
@@ -297,6 +321,93 @@ async fn close_splash(window: tauri::Window) {
     }
 }
 
+// ---------------------------------------------------------------------------
+// Praxis audit log commands
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+async fn add_audit_entry(
+    _app: AppHandle,
+    state: State<'_, AppState>,
+    entry: AuditEntryPayload,
+) -> Result<AuditEntryResponse, String> {
+    let database_path = {
+        let path_guard = state.vault_database_path.lock().unwrap();
+        match path_guard.as_ref() {
+            Some(p) => p.clone(),
+            // If vault is not yet initialized, silently skip persisting audit entries.
+            None => return Err("Vault not initialized".to_string()),
+        }
+    };
+
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to open vault: {}", e))?;
+
+    let result = vault_manager
+        .add_audit_entry(AuditEntryRequest {
+            action: &entry.action,
+            severity: &entry.severity,
+            partition: entry.partition.as_deref(),
+            credential_name: entry.credential_name.as_deref(),
+            details: entry.details.as_deref(),
+            success: entry.success,
+            error_message: entry.error_message.as_deref(),
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+
+    Ok(AuditEntryResponse {
+        id: result.id.to_string(),
+        action: result.action,
+        severity: result.severity,
+        timestamp: result.timestamp.to_rfc3339(),
+        partition: result.partition,
+        credential_name: result.credential_name,
+        details: result.details,
+        success: result.success,
+        error_message: result.error_message,
+    })
+}
+
+#[tauri::command]
+async fn list_audit_entries(
+    _app: AppHandle,
+    state: State<'_, AppState>,
+    limit: i64,
+) -> Result<Vec<AuditEntryResponse>, String> {
+    let database_path = {
+        let path_guard = state.vault_database_path.lock().unwrap();
+        path_guard.as_ref()
+            .ok_or("Vault not initialized")?
+            .clone()
+    };
+
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to open vault: {}", e))?;
+
+    let entries = vault_manager
+        .list_audit_entries(limit)
+        .await
+        .map_err(|e| e.to_string())?;
+
+    let response = entries
+        .into_iter()
+        .map(|e| AuditEntryResponse {
+            id: e.id.to_string(),
+            action: e.action,
+            severity: e.severity,
+            timestamp: e.timestamp.to_rfc3339(),
+            partition: e.partition,
+            credential_name: e.credential_name,
+            details: e.details,
+            success: e.success,
+            error_message: e.error_message,
+        })
+        .collect();
+
+    Ok(response)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let app_state = AppState {
@@ -376,6 +487,8 @@ pub fn run() {
             list_credentials,
             update_credential,
             delete_credential,
+            add_audit_entry,
+            list_audit_entries,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

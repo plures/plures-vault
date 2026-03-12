@@ -1,1 +1,5 @@
-// place files you want to import through the `$lib` alias in this folder.
+// Re-export public surface of $lib
+export * from './api.js';
+export * from './praxis.js';
+export { vaultState } from './state/vault.svelte.js';
+export { praxisState } from './state/praxis.svelte.js';

@@ -1,13 +1,15 @@
 <script lang="ts">
 	import '../app.css';
-    import { invoke } from '@tauri-apps/api/core';
-    import { onMount } from 'svelte';
+	import { invoke } from '@tauri-apps/api/core';
+	import { onMount } from 'svelte';
 
-    onMount(async () => {
-        // Signal backend that the main window is ready
-        // This will close the splash screen and show the main window
-        await invoke('close_splash');
-    });
+	let { children } = $props();
+
+	onMount(async () => {
+		// Signal backend that the main window is ready;
+		// this closes the splashscreen and shows the main window.
+		await invoke('close_splash');
+	});
 </script>
 
-<slot />
+{@render children()}

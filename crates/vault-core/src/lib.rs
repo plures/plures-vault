@@ -45,6 +45,33 @@ pub struct VaultMetadata {
     pub salt: String,
 }
 
+/// Praxis audit log entry – persisted for compliance and security analysis.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEntry {
+    pub id: Uuid,
+    pub action: String,
+    pub severity: String,
+    pub timestamp: DateTime<Utc>,
+    pub partition: Option<String>,
+    pub credential_name: Option<String>,
+    /// JSON-encoded metadata blob
+    pub details: Option<String>,
+    pub success: bool,
+    pub error_message: Option<String>,
+}
+
+/// Parameters for creating a new audit entry.
+#[derive(Debug, Default)]
+pub struct AuditEntryRequest<'a> {
+    pub action: &'a str,
+    pub severity: &'a str,
+    pub partition: Option<&'a str>,
+    pub credential_name: Option<&'a str>,
+    pub details: Option<&'a str>,
+    pub success: bool,
+    pub error_message: Option<&'a str>,
+}
+
 pub struct VaultManager {
     pool: SqlitePool,
     crypto: VaultCrypto,
@@ -83,6 +110,25 @@ impl VaultManager {
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 version INTEGER NOT NULL DEFAULT 1
+            )
+            "#,
+        )
+        .execute(&pool)
+        .await?;
+
+        // Praxis audit log – tracks every user action for compliance reporting
+        sqlx::query(
+            r#"
+            CREATE TABLE IF NOT EXISTS audit_log (
+                id TEXT PRIMARY KEY,
+                action TEXT NOT NULL,
+                severity TEXT NOT NULL DEFAULT 'info',
+                timestamp TEXT NOT NULL,
+                partition TEXT,
+                credential_name TEXT,
+                details TEXT,
+                success INTEGER NOT NULL DEFAULT 1,
+                error_message TEXT
             )
             "#,
         )
@@ -368,5 +414,75 @@ impl VaultManager {
     pub async fn check_initialization(&self) -> Result<VaultMetadata> {
         // Same as get_vault_metadata but for backward compatibility
         self.get_vault_metadata().await
+    }
+
+    // -----------------------------------------------------------------------
+    // Praxis audit log
+    // -----------------------------------------------------------------------
+
+    /// Persist a Praxis audit entry for compliance and security analysis.
+    pub async fn add_audit_entry(&self, req: AuditEntryRequest<'_>) -> Result<AuditEntry> {
+        let entry = AuditEntry {
+            id: Uuid::new_v4(),
+            action: req.action.to_string(),
+            severity: req.severity.to_string(),
+            timestamp: Utc::now(),
+            partition: req.partition.map(str::to_string),
+            credential_name: req.credential_name.map(str::to_string),
+            details: req.details.map(str::to_string),
+            success: req.success,
+            error_message: req.error_message.map(str::to_string),
+        };
+
+        sqlx::query(
+            r#"
+            INSERT INTO audit_log
+                (id, action, severity, timestamp, partition, credential_name, details, success, error_message)
+            VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "#,
+        )
+        .bind(entry.id.to_string())
+        .bind(&entry.action)
+        .bind(&entry.severity)
+        .bind(entry.timestamp.to_rfc3339())
+        .bind(&entry.partition)
+        .bind(&entry.credential_name)
+        .bind(&entry.details)
+        .bind(entry.success as i64)
+        .bind(&entry.error_message)
+        .execute(&self.pool)
+        .await?;
+
+        Ok(entry)
+    }
+
+    /// Retrieve the most recent Praxis audit log entries (newest first).
+    pub async fn list_audit_entries(&self, limit: i64) -> Result<Vec<AuditEntry>> {
+        let rows = sqlx::query(
+            "SELECT * FROM audit_log ORDER BY timestamp DESC LIMIT ?1",
+        )
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?;
+
+        let entries = rows
+            .iter()
+            .map(|row| -> Result<AuditEntry> {
+                Ok(AuditEntry {
+                    id: Uuid::parse_str(&row.get::<String, _>("id"))?,
+                    action: row.get("action"),
+                    severity: row.get("severity"),
+                    timestamp: DateTime::parse_from_rfc3339(&row.get::<String, _>("timestamp"))?
+                        .with_timezone(&Utc),
+                    partition: row.get("partition"),
+                    credential_name: row.get("credential_name"),
+                    details: row.get("details"),
+                    success: row.get::<i64, _>("success") != 0,
+                    error_message: row.get("error_message"),
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        Ok(entries)
     }
 }
