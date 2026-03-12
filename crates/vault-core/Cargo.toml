@@ -16,4 +16,4 @@ tokio = { version = "1.0", features = ["full"] }
 argon2 = "0.5"
 
 # Use only SQLx for database operations (avoids rusqlite conflict)
-sqlx = { version = "0.7", features = ["runtime-tokio-native-tls", "sqlite"] }
+sqlx = { version = "0.7", features = ["runtime-tokio-rustls", "sqlite", "migrate"] }

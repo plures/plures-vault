@@ -105,7 +105,7 @@ impl VaultCrypto {
 
         Ok(EncryptedData {
             ciphertext: general_purpose::STANDARD.encode(&ciphertext),
-            nonce: general_purpose::STANDARD.encode(&nonce),
+            nonce: general_purpose::STANDARD.encode(nonce),
         })
     }
 
@@ -157,9 +157,12 @@ mod tests {
         
         assert_eq!(plaintext, decrypted);
         
-        // Test password verification
-        let password_hash = format!("$argon2id$v=19$m=19456,t=2,p=1${}", salt);
-        let verified_key = crypto.verify_password(password, &salt, &password_hash);
+        // Generate a proper password hash for verification
+        let salt_string = SaltString::from_b64(&salt).unwrap();
+        let password_hash = crypto.argon2.hash_password(password.as_bytes(), &salt_string).unwrap();
+        let password_hash_string = password_hash.to_string();
+
+        let verified_key = crypto.verify_password(password, &salt, &password_hash_string);
         assert!(verified_key.is_ok());
     }
 
