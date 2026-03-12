@@ -325,12 +325,45 @@ async fn close_splash(window: tauri::Window) {
 // Praxis audit log commands
 // ---------------------------------------------------------------------------
 
+/// Maximum allowed byte lengths for audit entry string fields to prevent DoS
+/// via unbounded database growth.
+const AUDIT_ACTION_MAX_LEN: usize = 128;
+const AUDIT_FIELD_MAX_LEN: usize = 256;
+const AUDIT_DETAILS_MAX_LEN: usize = 2048;
+const AUDIT_ERROR_MAX_LEN: usize = 512;
+
+/// Allowed severity values for audit entries.
+const ALLOWED_SEVERITIES: &[&str] = &["info", "warning", "critical"];
+
 #[tauri::command]
 async fn add_audit_entry(
     _app: AppHandle,
     state: State<'_, AppState>,
     entry: AuditEntryPayload,
 ) -> Result<AuditEntryResponse, String> {
+    // Input validation – prevent DoS via unbounded field lengths and invalid enums.
+    if entry.action.is_empty() || entry.action.len() > AUDIT_ACTION_MAX_LEN {
+        return Err(format!("audit action must be 1–{} bytes", AUDIT_ACTION_MAX_LEN));
+    }
+    if !ALLOWED_SEVERITIES.contains(&entry.severity.as_str()) {
+        return Err(format!(
+            "audit severity must be one of: {}",
+            ALLOWED_SEVERITIES.join(", ")
+        ));
+    }
+    if entry.partition.as_deref().map(|s| s.len()).unwrap_or(0) > AUDIT_FIELD_MAX_LEN {
+        return Err(format!("partition name exceeds {} bytes", AUDIT_FIELD_MAX_LEN));
+    }
+    if entry.credential_name.as_deref().map(|s| s.len()).unwrap_or(0) > AUDIT_FIELD_MAX_LEN {
+        return Err(format!("credential name exceeds {} bytes", AUDIT_FIELD_MAX_LEN));
+    }
+    if entry.details.as_deref().map(|s| s.len()).unwrap_or(0) > AUDIT_DETAILS_MAX_LEN {
+        return Err(format!("details field exceeds {} bytes", AUDIT_DETAILS_MAX_LEN));
+    }
+    if entry.error_message.as_deref().map(|s| s.len()).unwrap_or(0) > AUDIT_ERROR_MAX_LEN {
+        return Err(format!("error message exceeds {} bytes", AUDIT_ERROR_MAX_LEN));
+    }
+
     let database_path = {
         let path_guard = state.vault_database_path.lock().unwrap();
         match path_guard.as_ref() {
