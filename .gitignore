@@ -1,0 +1,6 @@
+/target/
+vault-gui/node_modules/
+vault-gui/.svelte-kit/
+*.db
+*.db-shm
+*.db-wal

@@ -1,0 +1,24 @@
+[package]
+name = "vault-azure"
+version = "0.1.0"
+edition = "2021"
+authors = ["Plures Team <dev@plures.ai>"]
+description = "Azure Key Vault integration for Plures Vault"
+license = "MIT OR Apache-2.0"
+
+[dependencies]
+vault-core = { path = "../vault-core" }
+vault-crypto = { path = "../vault-crypto" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+tokio = { version = "1.0", features = ["full"] }
+anyhow = "1.0"
+thiserror = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
+base64 = "0.21"
+async-trait = "0.1"
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full", "test-util"] }

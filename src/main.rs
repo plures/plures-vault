@@ -1,8 +1,14 @@
 use clap::{Parser, Subcommand};
-use vault_core::{VaultManager, VaultError};
+use vault_core::VaultManager;
 use vault_sync::SyncManager;
+use vault_azure::{AzureAdAuthenticator, AzureAdConfig, AzureKeyVaultClient};
+use vault_enterprise::{
+    AuditCategory, AuditLogger, InMemoryAuditSink,
+    CreatePartitionRequest, Feature, LicenseManager, PartitionIsolation, PartitionManager,
+};
 use anyhow::Result;
 use std::io::{self, Write};
+use std::collections::HashMap;
 
 #[derive(Parser)]
 #[command(name = "plures-vault")]
@@ -78,6 +84,50 @@ enum Commands {
     Lock,
     /// Sync with other devices (placeholder for GUI)
     Sync,
+    // ── Azure Key Vault commands ───────────────────────────────────────────────
+    /// Configure and test Azure Key Vault connectivity
+    AzureKvConnect {
+        /// Azure AD tenant ID
+        #[arg(long)]
+        tenant_id: String,
+        /// Azure AD application (client) ID
+        #[arg(long)]
+        client_id: String,
+        /// Azure AD client secret
+        #[arg(long)]
+        client_secret: String,
+        /// Azure Key Vault name (subdomain, e.g. "my-vault")
+        #[arg(long)]
+        vault_name: String,
+    },
+    /// List secrets in the connected Azure Key Vault
+    AzureKvListSecrets {
+        #[arg(long)]
+        tenant_id: String,
+        #[arg(long)]
+        client_id: String,
+        #[arg(long)]
+        client_secret: String,
+        #[arg(long)]
+        vault_name: String,
+    },
+    // ── Enterprise / partition commands ───────────────────────────────────────
+    /// Create a new vault partition mapped to an Azure Key Vault
+    PartitionCreate {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        tenant_id: String,
+        #[arg(long)]
+        azure_vault_name: Option<String>,
+        #[arg(long)]
+        description: Option<String>,
+    },
+    /// List all configured vault partitions
+    PartitionList,
+    // ── License commands ──────────────────────────────────────────────────────
+    /// Display the status of the current enterprise license
+    LicenseStatus,
 }
 
 fn prompt_password(prompt: &str) -> Result<String> {
@@ -350,6 +400,177 @@ async fn main() -> Result<()> {
         Commands::Sync => {
             println!("🔄 Syncing with other devices...");
             println!("💡 Use 'start-sync' to run P2P server, or 'connect-peer' to connect to another device");
+        }
+
+        // ── Azure Key Vault commands ───────────────────────────────────────────
+        Commands::AzureKvConnect {
+            tenant_id,
+            client_id,
+            client_secret,
+            vault_name,
+        } => {
+            println!("☁️  Testing Azure Key Vault connectivity...");
+            println!("   Vault : {}.vault.azure.net", vault_name);
+            println!("   Tenant: {}", tenant_id);
+
+            let config = AzureAdConfig {
+                tenant_id,
+                client_id,
+                client_secret,
+            };
+
+            match AzureAdAuthenticator::new(config) {
+                Ok(auth) => match AzureKeyVaultClient::new(&vault_name, auth) {
+                    Ok(client) => {
+                        // Attempt to list secrets as a connectivity smoke-test
+                        match client.list_secrets().await {
+                            Ok(secrets) => {
+                                println!("✅ Successfully connected to Azure Key Vault");
+                                println!("   {} secret(s) found", secrets.len());
+                            }
+                            Err(e) => {
+                                eprintln!("❌ Connection failed: {}", e);
+                                std::process::exit(1);
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("❌ Client configuration error: {}", e);
+                        std::process::exit(1);
+                    }
+                },
+                Err(e) => {
+                    eprintln!("❌ Authentication configuration error: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Commands::AzureKvListSecrets {
+            tenant_id,
+            client_id,
+            client_secret,
+            vault_name,
+        } => {
+            println!("📋 Listing Azure Key Vault secrets...");
+
+            let config = AzureAdConfig {
+                tenant_id,
+                client_id,
+                client_secret,
+            };
+
+            let auth = AzureAdAuthenticator::new(config)
+                .map_err(|e| anyhow::anyhow!("Auth config error: {}", e))?;
+            let client = AzureKeyVaultClient::new(&vault_name, auth)
+                .map_err(|e| anyhow::anyhow!("Client error: {}", e))?;
+
+            match client.list_secrets().await {
+                Ok(secrets) if secrets.is_empty() => {
+                    println!("   (no secrets found)");
+                }
+                Ok(secrets) => {
+                    for s in secrets {
+                        let status = if s.enabled { "enabled" } else { "disabled" };
+                        println!("   • {} [{}]", s.name, status);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to list secrets: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        // ── Enterprise / partition commands ───────────────────────────────────
+        Commands::PartitionCreate {
+            name,
+            tenant_id,
+            azure_vault_name,
+            description,
+        } => {
+            // In a full implementation the max_partitions comes from
+            // LicenseManager; here we demonstrate with a generous default.
+            let mut mgr = PartitionManager::new(100);
+            let req = CreatePartitionRequest {
+                name: name.clone(),
+                description,
+                tenant_id,
+                azure_vault_name: azure_vault_name.clone(),
+                isolation: PartitionIsolation::Full,
+                tags: HashMap::new(),
+            };
+
+            match mgr.create_partition(req) {
+                Ok(partition) => {
+                    println!("✅ Partition '{}' created", partition.name);
+                    println!("   ID    : {}", partition.id);
+                    println!("   Status: {:?}", partition.status);
+                    if let Some(vault) = partition.azure_vault_name {
+                        println!("   Vault : {}.vault.azure.net", vault);
+                    }
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to create partition: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Commands::PartitionList => {
+            let mgr = PartitionManager::new(100);
+            let partitions = mgr.list_partitions();
+            if partitions.is_empty() {
+                println!("   (no partitions configured)");
+            } else {
+                for p in partitions {
+                    println!(
+                        "   • {} [{:?}]{}",
+                        p.name,
+                        p.status,
+                        p.azure_vault_name
+                            .as_deref()
+                            .map(|v| format!(" → {}.vault.azure.net", v))
+                            .unwrap_or_default()
+                    );
+                }
+            }
+        }
+
+        // ── License commands ──────────────────────────────────────────────────
+        Commands::LicenseStatus => {
+            let mut audit = AuditLogger::new().add_sink(InMemoryAuditSink::new(50));
+            let mgr = LicenseManager::new(vec![]);
+
+            let _ = audit.log_success(
+                "cli",
+                AuditCategory::LicenseManagement,
+                "license_status",
+                "License status queried from CLI",
+            );
+
+            if mgr.is_licensed() {
+                println!("✅ Enterprise license: ACTIVE");
+                println!("   Tier : {:?}", mgr.effective_tier());
+                let features = mgr.effective_features();
+                println!("   Features enabled: {}", features.len());
+                if mgr.is_feature_enabled(&Feature::AzureKeyVaultSync) {
+                    println!("   ✓ Azure Key Vault Sync");
+                }
+                if mgr.is_feature_enabled(&Feature::MultiPartition) {
+                    println!("   ✓ Multi-Partition");
+                }
+                if mgr.is_feature_enabled(&Feature::AuditLogging) {
+                    println!("   ✓ Audit Logging");
+                }
+                if mgr.is_feature_enabled(&Feature::AzureAdSso) {
+                    println!("   ✓ Azure AD SSO");
+                }
+            } else {
+                println!("ℹ️  License status: Community (no enterprise license loaded)");
+                println!("   Azure Key Vault sync and enterprise features require a license.");
+                println!("   Contact sales@plures.ai to upgrade.");
+            }
         }
     }
 
