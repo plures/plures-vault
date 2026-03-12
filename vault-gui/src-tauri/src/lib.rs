@@ -14,7 +14,7 @@ pub struct AppState {
 #[derive(Serialize, Deserialize)]
 pub struct CredentialData {
     pub id: Option<String>,
-    pub name: String,
+    pub title: String,
     pub username: String,
     pub password: String,
     pub url: Option<String>,
@@ -38,12 +38,12 @@ async fn check_vault_status(
         .map_err(|e| format!("Failed to initialize vault manager: {}", e))?;
 
     match vault_manager.check_initialization().await {
-        Ok(metadata) => {
+        Ok(config) => {
             let unlocked = *state.vault_unlocked.lock().unwrap();
             Ok(VaultStatus {
                 initialized: true,
                 unlocked,
-                vault_name: Some(metadata.name),
+                vault_name: Some(config.vault_name),
             })
         }
         Err(_) => Ok(VaultStatus {
@@ -127,7 +127,7 @@ async fn add_credential(
         .map_err(|e| format!("Failed to create vault manager: {}", e))?;
 
     let credential_id = vault_manager.add_credential(
-        credential_data.name,
+        credential_data.title,
         if credential_data.username.is_empty() { None } else { Some(credential_data.username) },
         credential_data.password,
         credential_data.url,
@@ -162,13 +162,13 @@ async fn get_credential(
     let vault_manager = VaultManager::new(&database_path).await
         .map_err(|e| format!("Failed to create vault manager: {}", e))?;
 
-    let credential = vault_manager.get_credential(&credential_id).await
+    let credential = vault_manager.get_credential_by_id(&credential_id).await
         .map_err(|e| e.to_string())?;
 
     if let Some(credential) = credential {
         Ok(CredentialData {
             id: Some(credential.id.to_string()),
-            name: credential.name,
+            title: credential.title,
             username: credential.username.unwrap_or_default(),
             password: credential.password,
             url: credential.url,
@@ -207,7 +207,7 @@ async fn list_credentials(
 
     let credential_data: Vec<CredentialData> = credentials.into_iter().map(|c| CredentialData {
         id: Some(c.id.to_string()),
-        name: c.name,
+        title: c.title,
         username: c.username.unwrap_or_default(),
         password: "••••••••••••".to_string(), // Don't expose passwords in list view
         url: c.url,
@@ -243,8 +243,9 @@ async fn update_credential(
         .map_err(|e| format!("Failed to create vault manager: {}", e))?;
 
     // Use the VaultManager's update method with individual parameters
-    vault_manager.update_credential(
-        &credential_id, // Find by name/id
+    vault_manager.update_credential_by_id(
+        &credential_id,
+        Some(credential_data.title),
         if credential_data.username.is_empty() { None } else { Some(credential_data.username) },
         Some(credential_data.password),
         credential_data.url,
@@ -279,7 +280,7 @@ async fn delete_credential(
     let vault_manager = VaultManager::new(&database_path).await
         .map_err(|e| format!("Failed to create vault manager: {}", e))?;
 
-    vault_manager.delete_credential(&credential_id).await
+    vault_manager.delete_credential_by_id(&credential_id).await
         .map_err(|e| e.to_string())?;
 
     Ok(())

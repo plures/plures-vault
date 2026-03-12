@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand};
-use vault_core::{VaultManager, VaultError};
+use vault_core::VaultManager;
 use vault_sync::SyncManager;
 use anyhow::Result;
 use std::io::{self, Write};
@@ -27,7 +27,7 @@ enum Commands {
     /// Add a new credential
     Add {
         #[arg(short, long)]
-        name: String,
+        title: String,
         #[arg(short, long)]
         username: Option<String>,
         #[arg(short, long)]
@@ -40,14 +40,14 @@ enum Commands {
     /// Get a credential
     Get {
         #[arg(short, long)]
-        name: String,
+        title: String,
     },
     /// List all credentials (names only for security)
     List,
     /// Update a credential
     Update {
         #[arg(short, long)]
-        name: String,
+        title: String,
         #[arg(long)]
         username: Option<String>,
         #[arg(long)]
@@ -60,7 +60,7 @@ enum Commands {
     /// Delete a credential
     Delete {
         #[arg(short, long)]
-        name: String,
+        title: String,
     },
     /// Start P2P sync server
     StartSync {
@@ -122,10 +122,9 @@ async fn main() -> Result<()> {
             }
             
             match vault.init_vault(&name, &password).await {
-                Ok(metadata) => {
-                    println!("✅ Vault '{}' initialized successfully", metadata.name);
-                    println!("   Vault ID: {}", metadata.id);
-                    println!("   Created: {}", metadata.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
+                Ok(config) => {
+                    println!("✅ Vault '{}' initialized successfully", config.vault_name);
+                    println!("   Created: {}", config.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
                 }
                 Err(e) => {
                     eprintln!("❌ Failed to initialize vault: {}", e);
@@ -139,8 +138,8 @@ async fn main() -> Result<()> {
             let password = prompt_password("Enter master password: ")?;
             
             match vault.unlock_vault(&password).await {
-                Ok(metadata) => {
-                    println!("✅ Vault '{}' unlocked successfully", metadata.name);
+                Ok(config) => {
+                    println!("✅ Vault '{}' unlocked successfully", config.vault_name);
                 }
                 Err(e) => {
                     eprintln!("❌ Failed to unlock vault: {}", e);
@@ -149,13 +148,13 @@ async fn main() -> Result<()> {
             }
         }
         
-        Commands::Add { name, username, password, url, notes } => {
+        Commands::Add { title, username, password, url, notes } => {
             if !vault.is_unlocked() {
                 let master_password = prompt_password("Enter master password to unlock vault: ")?;
                 vault.unlock_vault(&master_password).await?;
             }
             
-            println!("📝 Adding credential: {}", name);
+            println!("📝 Adding credential: {}", title);
             
             let username = username.or_else(|| prompt_optional("Username"));
             let password = password.unwrap_or_else(|| 
@@ -164,9 +163,9 @@ async fn main() -> Result<()> {
             let url = url.or_else(|| prompt_optional("URL"));
             let notes = notes.or_else(|| prompt_optional("Notes"));
             
-            match vault.add_credential(name.clone(), username, password, url, notes).await {
+            match vault.add_credential(title.clone(), username, password, url, notes).await {
                 Ok(credential) => {
-                    println!("✅ Credential '{}' added successfully", name);
+                    println!("✅ Credential '{}' added successfully", title);
                     println!("   ID: {}", credential.id);
                     println!("   Created: {}", credential.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
                 }
@@ -177,16 +176,16 @@ async fn main() -> Result<()> {
             }
         }
         
-        Commands::Get { name } => {
+        Commands::Get { title } => {
             if !vault.is_unlocked() {
                 let password = prompt_password("Enter master password to unlock vault: ")?;
                 vault.unlock_vault(&password).await?;
             }
             
-            println!("🔍 Getting credential: {}", name);
-            match vault.get_credential(&name).await? {
+            println!("🔍 Getting credential: {}", title);
+            match vault.get_credential(&title).await? {
                 Some(credential) => {
-                    println!("📋 Credential: {}", credential.name);
+                    println!("📋 Credential: {}", credential.title);
                     if let Some(username) = &credential.username {
                         println!("   Username: {}", username);
                     }
@@ -201,7 +200,7 @@ async fn main() -> Result<()> {
                     println!("   Updated: {}", credential.updated_at.format("%Y-%m-%d %H:%M:%S UTC"));
                 }
                 None => {
-                    println!("❌ Credential '{}' not found", name);
+                    println!("❌ Credential '{}' not found", title);
                 }
             }
         }
@@ -219,7 +218,7 @@ async fn main() -> Result<()> {
                 }
                 credentials => {
                     for credential in credentials {
-                        println!("   • {} {}", credential.name, 
+                        println!("   • {} {}", credential.title, 
                             if let Some(username) = &credential.username {
                                 format!("({})", username)
                             } else {
@@ -231,32 +230,31 @@ async fn main() -> Result<()> {
             }
         }
         
-        Commands::Update { name, username, password, url, notes } => {
+        Commands::Update { title, username, password, url, notes } => {
             if !vault.is_unlocked() {
                 let master_password = prompt_password("Enter master password to unlock vault: ")?;
                 vault.unlock_vault(&master_password).await?;
             }
             
-            println!("✏️  Updating credential: {}", name);
-            match vault.update_credential(&name, username, password, url, notes).await? {
+            println!("✏️  Updating credential: {}", title);
+            match vault.update_credential(&title, username, password, url, notes).await? {
                 Some(credential) => {
-                    println!("✅ Credential '{}' updated successfully", name);
-                    println!("   Version: {}", credential.version);
+                    println!("✅ Credential '{}' updated successfully", title);
                     println!("   Updated: {}", credential.updated_at.format("%Y-%m-%d %H:%M:%S UTC"));
                 }
                 None => {
-                    println!("❌ Credential '{}' not found", name);
+                    println!("❌ Credential '{}' not found", title);
                 }
             }
         }
         
-        Commands::Delete { name } => {
+        Commands::Delete { title } => {
             if !vault.is_unlocked() {
                 let password = prompt_password("Enter master password to unlock vault: ")?;
                 vault.unlock_vault(&password).await?;
             }
             
-            print!("Are you sure you want to delete '{}'? (y/N): ", name);
+            print!("Are you sure you want to delete '{}'? (y/N): ", title);
             io::stdout().flush()?;
             let mut confirmation = String::new();
             io::stdin().read_line(&mut confirmation)?;
@@ -266,10 +264,10 @@ async fn main() -> Result<()> {
                 return Ok(());
             }
             
-            if vault.delete_credential(&name).await? {
-                println!("✅ Credential '{}' deleted successfully", name);
+            if vault.delete_credential(&title).await? {
+                println!("✅ Credential '{}' deleted successfully", title);
             } else {
-                println!("❌ Credential '{}' not found", name);
+                println!("❌ Credential '{}' not found", title);
             }
         }
 
@@ -281,9 +279,8 @@ async fn main() -> Result<()> {
 
             println!("🚀 Starting P2P sync server on port {}...", port);
             
-            // Get vault metadata for sync
-            let metadata = vault.get_vault_metadata().await?;
-            let mut sync_manager = SyncManager::new(metadata.id);
+            let config = vault.get_vault_config().await?;
+            let mut sync_manager = SyncManager::new(config.vault_id);
             
             sync_manager.start_sync_server(port).await?;
             
@@ -302,8 +299,8 @@ async fn main() -> Result<()> {
 
             println!("🔗 Connecting to peer: {}", address);
             
-            let metadata = vault.get_vault_metadata().await?;
-            let mut sync_manager = SyncManager::new(metadata.id);
+            let config = vault.get_vault_config().await?;
+            let mut sync_manager = SyncManager::new(config.vault_id);
             
             match sync_manager.connect_to_peer(&address).await {
                 Ok(peer) => {
@@ -325,8 +322,8 @@ async fn main() -> Result<()> {
 
             println!("👥 Connected peers:");
             
-            let metadata = vault.get_vault_metadata().await?;
-            let sync_manager = SyncManager::new(metadata.id);
+            let config = vault.get_vault_config().await?;
+            let sync_manager = SyncManager::new(config.vault_id);
             let peers = sync_manager.list_peers().await;
             
             if peers.is_empty() {
