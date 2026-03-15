@@ -1,3 +1,5 @@
+pub mod windows_hello;
+
 use vault_crypto::{VaultCrypto, MasterKey, EncryptedData, CryptoError};
 use argon2::{password_hash::SaltString, PasswordHasher};
 use serde::{Deserialize, Serialize};
