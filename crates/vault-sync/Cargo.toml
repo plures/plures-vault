@@ -1,14 +1,15 @@
 [package]
 name = "vault-sync"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
-authors = ["Plures Team <dev@plures.ai>"]
-description = "P2P synchronization for Plures Vault"
+description = "P2P sync for Plures Vault via PluresDB CRDT replication"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-vault-core = { path = "../vault-core" }
-vault-crypto = { path = "../vault-crypto" }
+pluresdb = { path = "../../../pluresdb/crates/pluresdb" }
+pluresdb-core = { path = "../../../pluresdb/crates/pluresdb-core" }
+pluresdb-storage = { path = "../../../pluresdb/crates/pluresdb-storage" }
+pluresdb-sync = { path = "../../../pluresdb/crates/pluresdb-sync" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }
@@ -16,6 +17,4 @@ anyhow = "1.0"
 thiserror = "1.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
-
-# P2P networking (Hyperswarm integration planned)
-# hyperswarm = { git = "https://github.com/plures/hyperswarm-rs" }  # TODO: Phase 2
+tracing = "0.1"

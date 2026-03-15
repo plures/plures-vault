@@ -12,6 +12,7 @@ members = [
     "crates/vault-core",
     "crates/vault-crypto", 
     "crates/vault-sync",
+    "crates/vault-akv",
     "vault-gui/src-tauri"
 ]
 
