@@ -280,14 +280,16 @@ async fn main() -> Result<()> {
             println!("🚀 Starting P2P sync server on port {}...", port);
             
             let config = vault.get_vault_config().await?;
-            let mut sync_manager = SyncManager::new(config.vault_id);
+            let mut sync_manager = SyncManager::new(vault.store(), config.vault_id);
             
-            sync_manager.start_sync_server(port).await?;
+            sync_manager.start(port).await?;
             
-            println!("✅ P2P sync server running. Press Ctrl+C to stop.");
+            println!("✅ P2P sync server running on port {}. Press Ctrl+C to stop.", port);
+            println!("   Peer ID: {}", sync_manager.local_peer_id());
             
             // Keep the server running
             tokio::signal::ctrl_c().await?;
+            sync_manager.stop().await?;
             println!("\n🔄 Sync server stopped");
         }
 
@@ -300,13 +302,12 @@ async fn main() -> Result<()> {
             println!("🔗 Connecting to peer: {}", address);
             
             let config = vault.get_vault_config().await?;
-            let mut sync_manager = SyncManager::new(config.vault_id);
+            let mut sync_manager = SyncManager::new(vault.store(), config.vault_id);
             
-            match sync_manager.connect_to_peer(&address).await {
+            match sync_manager.connect_peer(&address).await {
                 Ok(peer) => {
-                    println!("✅ Successfully connected to peer: {}", peer.id);
-                    println!("   Public Key: {}", peer.public_key);
-                    println!("   Last Seen: {}", peer.last_seen.format("%Y-%m-%d %H:%M:%S UTC"));
+                    println!("✅ Connected to peer: {}", peer.id);
+                    println!("   Address: {}", peer.address);
                 }
                 Err(e) => {
                     println!("❌ Failed to connect to peer: {}", e);
@@ -320,22 +321,18 @@ async fn main() -> Result<()> {
                 vault.unlock_vault(&password).await?;
             }
 
-            println!("👥 Connected peers:");
-            
             let config = vault.get_vault_config().await?;
-            let sync_manager = SyncManager::new(config.vault_id);
-            let peers = sync_manager.list_peers().await;
+            let sync_manager = SyncManager::new(vault.store(), config.vault_id);
+            let stats = sync_manager.stats().await;
             
-            if peers.is_empty() {
-                println!("   (no peers connected)");
-            } else {
-                for peer in peers {
-                    println!("   • {} ({})", peer.id, peer.public_key);
-                    println!("     Last seen: {}", peer.last_seen.format("%Y-%m-%d %H:%M:%S UTC"));
-                    if let Some(address) = &peer.address {
-                        println!("     Address: {}", address);
-                    }
-                }
+            println!("👥 Sync status:");
+            println!("   Running: {}", sync_manager.is_running());
+            println!("   Peer ID: {}", sync_manager.local_peer_id());
+            println!("   Peers connected: {}", stats.peers_connected);
+            println!("   Events sent: {}", stats.events_sent);
+            println!("   Events received: {}", stats.events_received);
+            if let Some(last) = stats.last_sync {
+                println!("   Last sync: {}", last.format("%Y-%m-%d %H:%M:%S UTC"));
             }
         }
         

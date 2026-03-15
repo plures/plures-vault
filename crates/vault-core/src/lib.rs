@@ -161,6 +161,11 @@ impl VaultManager {
         })
     }
 
+    /// Get a reference to the underlying CRDT store (for sync).
+    pub fn store(&self) -> Arc<CrdtStore> {
+        self.store.clone()
+    }
+
     // ── Vault lifecycle ───────────────────────────────────────────────────────
 
     pub async fn init_vault(
