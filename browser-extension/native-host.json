@@ -1,0 +1,9 @@
+{
+  "name": "com.plures.vault",
+  "description": "Plures Vault native messaging host",
+  "path": "/usr/local/bin/plures-vault-native",
+  "type": "stdio",
+  "allowed_origins": [
+    "chrome-extension://EXTENSION_ID_HERE/"
+  ]
+}

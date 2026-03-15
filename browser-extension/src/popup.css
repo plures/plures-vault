@@ -1,0 +1,252 @@
+:root {
+  --bg: #0f1117;
+  --bg-secondary: #1a1d27;
+  --bg-hover: #252830;
+  --text: #e4e4e7;
+  --text-muted: #71717a;
+  --accent: #6366f1;
+  --accent-hover: #818cf8;
+  --success: #10b981;
+  --danger: #ef4444;
+  --border: #27272a;
+  --radius: 8px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  width: 380px;
+  min-height: 480px;
+  max-height: 600px;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  font-size: 14px;
+  background: var(--bg);
+  color: var(--text);
+  overflow-y: auto;
+}
+
+.screen { padding: 16px; }
+.hidden { display: none !important; }
+
+/* ── Lock Screen ─────────────────────────────────────────────────────────── */
+
+#lock-screen {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 480px;
+  gap: 24px;
+}
+
+.header { text-align: center; }
+.logo { font-size: 48px; margin-bottom: 12px; }
+.header h1 { font-size: 22px; font-weight: 600; }
+.subtitle { color: var(--text-muted); margin-top: 4px; font-size: 13px; }
+
+#unlock-form {
+  width: 100%;
+  max-width: 280px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+/* ── Inputs ──────────────────────────────────────────────────────────────── */
+
+input[type="text"],
+input[type="password"],
+input[type="email"],
+input[type="url"],
+input[type="search"],
+textarea {
+  width: 100%;
+  padding: 10px 12px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text);
+  font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+input:focus, textarea:focus {
+  border-color: var(--accent);
+}
+
+textarea { resize: vertical; font-family: inherit; }
+
+/* ── Buttons ─────────────────────────────────────────────────────────────── */
+
+.btn-primary {
+  padding: 10px 16px;
+  background: var(--accent);
+  color: white;
+  border: none;
+  border-radius: var(--radius);
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.btn-primary:hover { background: var(--accent-hover); }
+
+.btn-secondary {
+  padding: 8px 14px;
+  background: var(--bg-secondary);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.btn-secondary:hover { background: var(--bg-hover); }
+
+.btn-sm { padding: 6px 12px; font-size: 12px; }
+
+.btn-icon {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  font-size: 18px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+.btn-icon:hover { background: var(--bg-hover); color: var(--text); }
+
+.btn-copy {
+  background: none;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 14px;
+}
+
+.btn-copy:hover { color: var(--text); }
+
+/* ── Toolbar ─────────────────────────────────────────────────────────────── */
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.toolbar input[type="search"] { flex: 1; }
+.toolbar h2 { flex: 1; font-size: 16px; font-weight: 500; }
+
+/* ── Credentials List ────────────────────────────────────────────────────── */
+
+.list { display: flex; flex-direction: column; gap: 2px; }
+
+.credential-item {
+  display: flex;
+  align-items: center;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.credential-item:hover { background: var(--bg-hover); }
+
+.credential-icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 6px;
+  background: var(--bg-secondary);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 12px;
+  font-size: 16px;
+  flex-shrink: 0;
+}
+
+.credential-info { flex: 1; min-width: 0; }
+
+.credential-title {
+  font-weight: 500;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.credential-username {
+  color: var(--text-muted);
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Detail Screen ───────────────────────────────────────────────────────── */
+
+.detail-fields { display: flex; flex-direction: column; gap: 16px; }
+
+.field label {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  margin-bottom: 4px;
+}
+
+.field-value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.field-value span, .field-value a {
+  flex: 1;
+  font-size: 14px;
+  word-break: break-all;
+}
+
+.field-value a { color: var(--accent); text-decoration: none; }
+.field-value a:hover { text-decoration: underline; }
+
+.masked { letter-spacing: 2px; color: var(--text-muted); }
+
+/* ── Password Field ──────────────────────────────────────────────────────── */
+
+.password-field {
+  display: flex;
+  gap: 8px;
+}
+
+.password-field input { flex: 1; }
+
+/* ── Empty State ─────────────────────────────────────────────────────────── */
+
+.empty {
+  text-align: center;
+  padding: 40px 16px;
+  color: var(--text-muted);
+}
+
+.empty p { margin-bottom: 16px; }
+
+/* ── Error ────────────────────────────────────────────────────────────────── */
+
+.error {
+  color: var(--danger);
+  font-size: 13px;
+  text-align: center;
+  padding: 8px;
+}
