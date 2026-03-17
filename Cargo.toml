@@ -17,6 +17,7 @@ members = [
     "crates/vault-crypto", 
     "crates/vault-sync",
     "crates/vault-akv",
+    "crates/vault-graph",
     "vault-gui/src-tauri"
 ]
 
