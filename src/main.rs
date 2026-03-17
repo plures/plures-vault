@@ -1,12 +1,15 @@
 use clap::{Parser, Subcommand};
 use vault_core::VaultManager;
+use vault_graph::{SecretGraph, SecretNodeKind, RelationshipType};
+use vault_mcp::McpServer;
 use vault_sync::SyncManager;
 use anyhow::Result;
 use std::io::{self, Write};
+use uuid::Uuid;
 
 #[derive(Parser)]
 #[command(name = "plures-vault")]
-#[command(about = "Zero-trust P2P password manager")]
+#[command(about = "Zero-trust P2P password manager with graph-native secrets and AI-native MCP")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
@@ -78,6 +81,60 @@ enum Commands {
     Lock,
     /// Sync with other devices (placeholder for GUI)
     Sync,
+    /// Graph-native secret relationship management
+    #[command(subcommand)]
+    Graph(GraphCommands),
+    /// Start MCP server for AI-native interactions (reads JSON-RPC from stdin)
+    McpServe,
+}
+
+#[derive(Subcommand)]
+enum GraphCommands {
+    /// Add a group node to the secret graph
+    AddGroup {
+        #[arg(short, long)]
+        label: String,
+    },
+    /// Add a tag node to the secret graph
+    AddTag {
+        #[arg(short, long)]
+        label: String,
+    },
+    /// Link a credential to a group
+    LinkGroup {
+        /// Credential ID (UUID)
+        #[arg(long)]
+        credential: String,
+        /// Group node ID (UUID)
+        #[arg(long)]
+        group: String,
+    },
+    /// Link a credential to a tag
+    LinkTag {
+        /// Credential ID (UUID)
+        #[arg(long)]
+        credential: String,
+        /// Tag node ID (UUID)
+        #[arg(long)]
+        tag: String,
+    },
+    /// Add a dependency between two credentials
+    AddDep {
+        /// Source credential ID (depends on target)
+        #[arg(long)]
+        source: String,
+        /// Target credential ID (depended upon)
+        #[arg(long)]
+        target: String,
+    },
+    /// Show rotation impact analysis for a credential
+    Impact {
+        /// Credential ID (UUID)
+        #[arg(long)]
+        credential: String,
+    },
+    /// Show the full secret graph
+    Show,
 }
 
 fn prompt_password(prompt: &str) -> Result<String> {
@@ -345,7 +402,148 @@ async fn main() -> Result<()> {
             println!("🔄 Syncing with other devices...");
             println!("💡 Use 'start-sync' to run P2P server, or 'connect-peer' to connect to another device");
         }
+
+        Commands::Graph(graph_cmd) => {
+            // Load or create graph state
+            let graph_path = format!("{}.graph.json", cli.database);
+            let mut graph = load_graph(&graph_path);
+
+            match graph_cmd {
+                GraphCommands::AddGroup { label } => {
+                    let node = graph.add_node(SecretNodeKind::Group, &label);
+                    println!("✅ Group '{}' created", label);
+                    println!("   ID: {}", node.id);
+                }
+                GraphCommands::AddTag { label } => {
+                    let node = graph.add_node(SecretNodeKind::Tag, &label);
+                    println!("✅ Tag '{}' created", label);
+                    println!("   ID: {}", node.id);
+                }
+                GraphCommands::LinkGroup { credential, group } => {
+                    let cred_id = Uuid::parse_str(&credential)
+                        .map_err(|e| anyhow::anyhow!("Invalid credential UUID: {}", e))?;
+                    let group_id = Uuid::parse_str(&group)
+                        .map_err(|e| anyhow::anyhow!("Invalid group UUID: {}", e))?;
+
+                    // Ensure credential node exists in graph
+                    if graph.get_node(&cred_id).is_none() {
+                        graph.add_node_with_id(cred_id, SecretNodeKind::Credential, &credential);
+                    }
+
+                    match graph.add_edge(cred_id, group_id, RelationshipType::GroupMember) {
+                        Ok(_) => println!("✅ Credential linked to group"),
+                        Err(e) => println!("❌ Failed to link: {}", e),
+                    }
+                }
+                GraphCommands::LinkTag { credential, tag } => {
+                    let cred_id = Uuid::parse_str(&credential)
+                        .map_err(|e| anyhow::anyhow!("Invalid credential UUID: {}", e))?;
+                    let tag_id = Uuid::parse_str(&tag)
+                        .map_err(|e| anyhow::anyhow!("Invalid tag UUID: {}", e))?;
+
+                    if graph.get_node(&cred_id).is_none() {
+                        graph.add_node_with_id(cred_id, SecretNodeKind::Credential, &credential);
+                    }
+
+                    match graph.add_edge(cred_id, tag_id, RelationshipType::TaggedWith) {
+                        Ok(_) => println!("✅ Credential tagged"),
+                        Err(e) => println!("❌ Failed to tag: {}", e),
+                    }
+                }
+                GraphCommands::AddDep { source, target } => {
+                    let source_id = Uuid::parse_str(&source)
+                        .map_err(|e| anyhow::anyhow!("Invalid source UUID: {}", e))?;
+                    let target_id = Uuid::parse_str(&target)
+                        .map_err(|e| anyhow::anyhow!("Invalid target UUID: {}", e))?;
+
+                    if graph.get_node(&source_id).is_none() {
+                        graph.add_node_with_id(source_id, SecretNodeKind::Credential, &source);
+                    }
+                    if graph.get_node(&target_id).is_none() {
+                        graph.add_node_with_id(target_id, SecretNodeKind::Credential, &target);
+                    }
+
+                    match graph.add_edge(source_id, target_id, RelationshipType::DependsOn) {
+                        Ok(_) => println!("✅ Dependency added: {} → {}", source, target),
+                        Err(e) => println!("❌ Failed to add dependency: {}", e),
+                    }
+                }
+                GraphCommands::Impact { credential } => {
+                    let cred_id = Uuid::parse_str(&credential)
+                        .map_err(|e| anyhow::anyhow!("Invalid credential UUID: {}", e))?;
+
+                    let impacted = graph.rotation_impact(&cred_id);
+                    if impacted.is_empty() {
+                        println!("✅ No other credentials depend on {}", credential);
+                    } else {
+                        println!("⚠️  Rotation impact for {}:", credential);
+                        for node in impacted {
+                            println!("   • {} ({})", node.label, node.id);
+                        }
+                    }
+                }
+                GraphCommands::Show => {
+                    let nodes = graph.list_nodes();
+                    let edge_count = graph.edge_count();
+                    println!("📊 Secret Graph: {} nodes, {} edges", nodes.len(), edge_count);
+                    println!();
+                    for node in &nodes {
+                        println!("  [{:?}] {} ({})", node.kind, node.label, node.id);
+                        let edges = graph.get_edges_from(&node.id);
+                        for edge in edges {
+                            if let Some(target) = graph.get_node(&edge.target) {
+                                println!("    → {:?} → {} ({})", edge.relationship, target.label, target.id);
+                            }
+                        }
+                    }
+                }
+            }
+
+            save_graph(&graph, &graph_path)?;
+        }
+
+        Commands::McpServe => {
+            println!("🤖 Starting MCP server (reading JSON-RPC from stdin)...");
+            println!("   Send JSON-RPC requests, one per line. Ctrl+D to exit.");
+
+            let mut server = McpServer::new();
+            let mut input = String::new();
+            
+            loop {
+                input.clear();
+                match io::stdin().read_line(&mut input) {
+                    Ok(0) => break, // EOF
+                    Ok(_) => {
+                        let trimmed = input.trim();
+                        if trimmed.is_empty() {
+                            continue;
+                        }
+                        match server.handle_message(trimmed) {
+                            Ok(response) => println!("{}", response),
+                            Err(e) => eprintln!("MCP error: {}", e),
+                        }
+                    }
+                    Err(e) => {
+                        eprintln!("Read error: {}", e);
+                        break;
+                    }
+                }
+            }
+        }
     }
 
+    Ok(())
+}
+
+fn load_graph(path: &str) -> SecretGraph {
+    match std::fs::read_to_string(path) {
+        Ok(json) => SecretGraph::from_json(&json).unwrap_or_default(),
+        Err(_) => SecretGraph::new(),
+    }
+}
+
+fn save_graph(graph: &SecretGraph, path: &str) -> Result<()> {
+    let json = graph.to_json().map_err(|e| anyhow::anyhow!("Failed to serialize graph: {}", e))?;
+    std::fs::write(path, json)?;
     Ok(())
 }
