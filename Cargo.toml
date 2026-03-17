@@ -18,6 +18,7 @@ members = [
     "crates/vault-sync",
     "crates/vault-akv",
     "crates/vault-graph",
+    "crates/vault-mcp",
     "vault-gui/src-tauri"
 ]
 
