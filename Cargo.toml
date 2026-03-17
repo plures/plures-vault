@@ -9,6 +9,10 @@ repository = "https://github.com/plures/plures-vault"
 
 [workspace]
 members = [
+    "crates/pluresdb-core",
+    "crates/pluresdb-storage",
+    "crates/pluresdb-sync",
+    "crates/pluresdb",
     "crates/vault-core",
     "crates/vault-crypto", 
     "crates/vault-sync",

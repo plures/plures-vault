@@ -1,0 +1,11 @@
+[package]
+name = "pluresdb"
+version = "0.1.0"
+edition = "2021"
+description = "PluresDB - CRDT-based embedded database"
+
+[dependencies]
+pluresdb-core = { path = "../pluresdb-core" }
+pluresdb-storage = { path = "../pluresdb-storage" }
+pluresdb-sync = { path = "../pluresdb-sync" }
+serde_json = "1.0"
