@@ -425,9 +425,10 @@ async fn main() -> Result<()> {
                     let group_id = Uuid::parse_str(&group)
                         .map_err(|e| anyhow::anyhow!("Invalid group UUID: {}", e))?;
 
-                    // Ensure credential node exists in graph
+                    // Auto-create credential node if not in graph, using title from vault if available
                     if graph.get_node(&cred_id).is_none() {
-                        graph.add_node_with_id(cred_id, SecretNodeKind::Credential, &credential);
+                        let label = credential_label(&vault, &cred_id).await;
+                        graph.add_node_with_id(cred_id, SecretNodeKind::Credential, label);
                     }
 
                     match graph.add_edge(cred_id, group_id, RelationshipType::GroupMember) {
@@ -442,7 +443,8 @@ async fn main() -> Result<()> {
                         .map_err(|e| anyhow::anyhow!("Invalid tag UUID: {}", e))?;
 
                     if graph.get_node(&cred_id).is_none() {
-                        graph.add_node_with_id(cred_id, SecretNodeKind::Credential, &credential);
+                        let label = credential_label(&vault, &cred_id).await;
+                        graph.add_node_with_id(cred_id, SecretNodeKind::Credential, label);
                     }
 
                     match graph.add_edge(cred_id, tag_id, RelationshipType::TaggedWith) {
@@ -457,10 +459,12 @@ async fn main() -> Result<()> {
                         .map_err(|e| anyhow::anyhow!("Invalid target UUID: {}", e))?;
 
                     if graph.get_node(&source_id).is_none() {
-                        graph.add_node_with_id(source_id, SecretNodeKind::Credential, &source);
+                        let label = credential_label(&vault, &source_id).await;
+                        graph.add_node_with_id(source_id, SecretNodeKind::Credential, label);
                     }
                     if graph.get_node(&target_id).is_none() {
-                        graph.add_node_with_id(target_id, SecretNodeKind::Credential, &target);
+                        let label = credential_label(&vault, &target_id).await;
+                        graph.add_node_with_id(target_id, SecretNodeKind::Credential, label);
                     }
 
                     match graph.add_edge(source_id, target_id, RelationshipType::DependsOn) {
@@ -546,4 +550,15 @@ fn save_graph(graph: &SecretGraph, path: &str) -> Result<()> {
     let json = graph.to_json().map_err(|e| anyhow::anyhow!("Failed to serialize graph: {}", e))?;
     std::fs::write(path, json)?;
     Ok(())
+}
+
+/// Try to look up a credential title from the vault for use as a graph node label.
+/// Falls back to a formatted UUID string if the vault is locked or the credential is not found.
+async fn credential_label(vault: &VaultManager, id: &Uuid) -> String {
+    if vault.is_unlocked() {
+        if let Ok(Some(cred)) = vault.get_credential_by_id(&id.to_string()).await {
+            return cred.title;
+        }
+    }
+    format!("credential:{}", &id.to_string()[..8])
 }
