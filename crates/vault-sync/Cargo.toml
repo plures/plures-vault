@@ -6,10 +6,10 @@ description = "P2P sync for Plures Vault via PluresDB CRDT replication"
 license = "MIT OR Apache-2.0"
 
 [dependencies]
-pluresdb = { path = "../../../pluresdb/crates/pluresdb" }
-pluresdb-core = { path = "../../../pluresdb/crates/pluresdb-core" }
-pluresdb-storage = { path = "../../../pluresdb/crates/pluresdb-storage" }
-pluresdb-sync = { path = "../../../pluresdb/crates/pluresdb-sync" }
+pluresdb = { path = "../pluresdb" }
+pluresdb-core = { path = "../pluresdb-core" }
+pluresdb-storage = { path = "../pluresdb-storage" }
+pluresdb-sync = { path = "../pluresdb-sync" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tokio = { version = "1.0", features = ["full"] }

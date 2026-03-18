@@ -9,10 +9,16 @@ repository = "https://github.com/plures/plures-vault"
 
 [workspace]
 members = [
+    "crates/pluresdb-core",
+    "crates/pluresdb-storage",
+    "crates/pluresdb-sync",
+    "crates/pluresdb",
     "crates/vault-core",
     "crates/vault-crypto", 
     "crates/vault-sync",
     "crates/vault-akv",
+    "crates/vault-graph",
+    "crates/vault-mcp",
     "vault-gui/src-tauri"
 ]
 
@@ -20,7 +26,11 @@ members = [
 vault-core = { path = "crates/vault-core" }
 vault-crypto = { path = "crates/vault-crypto" }
 vault-sync = { path = "crates/vault-sync" }  # Phase 3: P2P sync enabled
+vault-graph = { path = "crates/vault-graph" }
+vault-mcp = { path = "crates/vault-mcp" }
 clap = { version = "4.0", features = ["derive"] }
 tokio = { version = "1.0", features = ["full"] }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+uuid = { version = "1.0", features = ["v4"] }

@@ -6,9 +6,9 @@ description = "Core vault operations backed by PluresDB"
 
 [dependencies]
 vault-crypto = { path = "../vault-crypto" }
-pluresdb = { path = "../../../pluresdb/crates/pluresdb" }
-pluresdb-core = { path = "../../../pluresdb/crates/pluresdb-core" }
-pluresdb-storage = { path = "../../../pluresdb/crates/pluresdb-storage" }
+pluresdb = { path = "../pluresdb" }
+pluresdb-core = { path = "../pluresdb-core" }
+pluresdb-storage = { path = "../pluresdb-storage" }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
