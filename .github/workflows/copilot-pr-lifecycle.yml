@@ -10,12 +10,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
-  issues: write
+  contents: read
+  pull-requests: read
+  issues: read
 
 jobs:
   lifecycle:
+    permissions:
+      contents: read
+      pull-requests: write
     runs-on: ubuntu-latest
     if: >-
       github.event.pull_request.merged != true &&
