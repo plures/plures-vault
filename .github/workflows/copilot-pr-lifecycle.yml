@@ -146,10 +146,11 @@ jobs:
               if (failing.length > 0) {
                 // CI failing — create issue for Copilot to fix
                 const failNames = failing.map(f => f.name).join(', ');
-                const existing = await github.rest.issues.listForRepo({
-                  owner, repo, state: 'open', labels: 'ci-failure', per_page: 20
-                });
-                if (!existing.data.some(i => i.title.includes(`PR #${pr.number}`))) {
+                const existing = await github.paginate(
+                  github.rest.issues.listForRepo,
+                  { owner, repo, state: 'open', labels: 'ci-failure', per_page: 100 }
+                );
+                if (!existing.some(i => i.title.includes(`PR #${pr.number}`))) {
                   const issue = await github.rest.issues.create({
                     owner, repo,
                     title: `[ci-feedback] Fix CI failures on PR #${pr.number}`,
