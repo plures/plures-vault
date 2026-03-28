@@ -10,15 +10,12 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pull-requests: read
-  issues: read
+  contents: write
+  pull-requests: write
+  issues: write
 
 jobs:
   lifecycle:
-    permissions:
-      contents: read
-      pull-requests: write
     runs-on: ubuntu-latest
     if: >-
       github.event.pull_request.merged != true &&
@@ -61,11 +58,10 @@ jobs:
             const botId = 'BOT_kgDOC9w8XQ';
 
             // Phase 1: Check open Copilot PRs — approve+merge if ready
-            const openPRs = await github.paginate(
-              github.rest.pulls.list,
-              { owner, repo, state: 'open', per_page: 100 }
-            );
-            const copilotPRs = openPRs.filter(p => p.user.login === 'Copilot');
+            const openPRs = await github.rest.pulls.list({
+              owner, repo, state: 'open', per_page: 10
+            });
+            const copilotPRs = openPRs.data.filter(p => p.user.login === 'Copilot');
 
             for (const pr of copilotPRs) {
               const sha = pr.head.sha;
@@ -150,11 +146,10 @@ jobs:
               if (failing.length > 0) {
                 // CI failing — create issue for Copilot to fix
                 const failNames = failing.map(f => f.name).join(', ');
-                const existing = await github.paginate(
-                  github.rest.issues.listForRepo,
-                  { owner, repo, state: 'open', labels: 'ci-failure', per_page: 100 }
-                );
-                if (!existing.some(i => i.title.includes(`PR #${pr.number}`))) {
+                const existing = await github.rest.issues.listForRepo({
+                  owner, repo, state: 'open', labels: 'ci-failure', per_page: 20
+                });
+                if (!existing.data.some(i => i.title.includes(`PR #${pr.number}`))) {
                   const issue = await github.rest.issues.create({
                     owner, repo,
                     title: `[ci-feedback] Fix CI failures on PR #${pr.number}`,
