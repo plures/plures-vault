@@ -10,9 +10,14 @@
 		"prepare": "svelte-kit sync || echo ''",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test": "vitest run",
+		"test:watch": "vitest",
 		"tauri": "tauri",
 		"tauri:dev": "tauri dev",
 		"tauri:build": "tauri build"
+	},
+	"engines": {
+		"node": "^20 || ^22 || >=24"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^7.0.0",
@@ -21,10 +26,12 @@
 		"svelte": "^5.51.0",
 		"svelte-check": "^4.4.2",
 		"typescript": "^5.9.3",
-		"vite": "^7.3.1"
+		"vite": "^7.3.1",
+		"vitest": "^4.1.2"
 	},
 	"dependencies": {
 		"@plures/design-dojo": "file:../../design-dojo",
+		"@plures/praxis": "^1.4.0",
 		"@tauri-apps/api": "^2.10.1",
 		"@tauri-apps/cli": "^2.10.1"
 	}
