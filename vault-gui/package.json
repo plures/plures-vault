@@ -16,6 +16,9 @@
 		"tauri:dev": "tauri dev",
 		"tauri:build": "tauri build"
 	},
+	"engines": {
+		"node": "^20 || ^22 || >=24"
+	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^7.0.0",
 		"@sveltejs/kit": "^2.50.2",

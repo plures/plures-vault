@@ -27,9 +27,9 @@ export interface AccessControlContext {
 
 // ─── Derived helpers ──────────────────────────────────────────────────────────
 
-function isSessionExpired(ctx: AccessControlContext): boolean {
+function isSessionExpired(ctx: AccessControlContext, now: number = Date.now()): boolean {
   if (!ctx.isUnlocked) return false;
-  return Date.now() - ctx.lastUnlockTime > ctx.sessionTimeoutMs;
+  return now - ctx.lastUnlockTime > ctx.sessionTimeoutMs;
 }
 
 // ─── Rules ────────────────────────────────────────────────────────────────────
@@ -51,10 +51,11 @@ export const sessionTimeoutRule = defineRule<AccessControlContext>({
   id: 'access-control.session-timeout',
   description: 'Lock the vault when the session idle timeout is exceeded',
   impl: ({ context }) => {
-    if (isSessionExpired(context)) {
+    const now = Date.now();
+    if (isSessionExpired(context, now)) {
       return RuleResult.emit([
         fact('access.session-expired', {
-          idleMs: Date.now() - context.lastUnlockTime,
+          idleMs: now - context.lastUnlockTime,
           timeoutMs: context.sessionTimeoutMs,
         }),
       ]);

@@ -13,6 +13,9 @@ import {
 
 const SESSION_15_MIN = 15 * 60 * 1000;
 
+type AccessControlPraxisState = Parameters<typeof vaultInitializationGateRule.impl>[0];
+type AccessControlConstraintState = Parameters<typeof vaultMustBeInitializedConstraint.impl>[0];
+
 function makeContext(overrides: Partial<AccessControlContext> = {}): AccessControlContext {
   return {
     isInitialized: true,
@@ -26,8 +29,12 @@ function makeContext(overrides: Partial<AccessControlContext> = {}): AccessContr
   };
 }
 
-function makeState(ctx: AccessControlContext) {
-  return { context: ctx, facts: [], meta: {} } as never;
+function makeState(ctx: AccessControlContext): AccessControlPraxisState {
+  return { context: ctx, facts: [], meta: {} };
+}
+
+function makeConstraintState(ctx: AccessControlContext): AccessControlConstraintState {
+  return { context: ctx, facts: [], meta: {} };
 }
 
 describe('access-control module', () => {
@@ -127,13 +134,13 @@ describe('bruteForceProtectionRule', () => {
 describe('vaultMustBeInitializedConstraint', () => {
   it('rejects unlock attempts on uninitialized vault', () => {
     const ctx = makeContext({ isInitialized: false, failedAttempts: 1 });
-    const result = vaultMustBeInitializedConstraint.impl(makeState(ctx));
+    const result = vaultMustBeInitializedConstraint.impl(makeConstraintState(ctx));
     expect(typeof result).toBe('string');
   });
 
   it('allows uninitialized vault when no attempts have been made', () => {
     const ctx = makeContext({ isInitialized: false, failedAttempts: 0 });
-    const result = vaultMustBeInitializedConstraint.impl(makeState(ctx));
+    const result = vaultMustBeInitializedConstraint.impl(makeConstraintState(ctx));
     expect(result).toBe(true);
   });
 });
@@ -142,13 +149,13 @@ describe('sessionActiveConstraint', () => {
   it('rejects expired session', () => {
     const expiredTime = Date.now() - SESSION_15_MIN - 1000;
     const ctx = makeContext({ lastUnlockTime: expiredTime });
-    const result = sessionActiveConstraint.impl(makeState(ctx));
+    const result = sessionActiveConstraint.impl(makeConstraintState(ctx));
     expect(typeof result).toBe('string');
   });
 
   it('allows active session', () => {
     const ctx = makeContext({ lastUnlockTime: Date.now() });
-    const result = sessionActiveConstraint.impl(makeState(ctx));
+    const result = sessionActiveConstraint.impl(makeConstraintState(ctx));
     expect(result).toBe(true);
   });
 });

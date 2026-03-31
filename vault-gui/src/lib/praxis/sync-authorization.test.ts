@@ -11,6 +11,12 @@ import {
   type SyncAuthorizationContext,
 } from './sync-authorization.js';
 
+type SyncAuthorizationState = {
+  context: SyncAuthorizationContext;
+  facts: unknown[];
+  meta: Record<string, unknown>;
+};
+
 function makeContext(overrides: Partial<SyncAuthorizationContext> = {}): SyncAuthorizationContext {
   return {
     peerFingerprint: 'abc123',
@@ -23,8 +29,8 @@ function makeContext(overrides: Partial<SyncAuthorizationContext> = {}): SyncAut
   };
 }
 
-function makeState(ctx: SyncAuthorizationContext) {
-  return { context: ctx, facts: [], meta: {} } as never;
+function makeState(ctx: SyncAuthorizationContext): SyncAuthorizationState {
+  return { context: ctx, facts: [], meta: {} };
 }
 
 describe('sync-authorization module', () => {
