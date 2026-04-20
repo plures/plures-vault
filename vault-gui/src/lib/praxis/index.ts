@@ -15,6 +15,12 @@ export {
   breachCheckRule,
   noRepeatingCharsConstraint,
   noCommonPatternsConstraint,
+  minimumLengthContract,
+  complexityContract,
+  entropyContract,
+  breachCheckContract,
+  noRepeatingCharsContract,
+  noCommonPatternsContract,
   calculateEntropy,
 } from './password-policy.js';
 
@@ -26,6 +32,12 @@ export {
   conflictResolutionRule,
   encryptionAndSignatureConstraint,
   trustedPeerEncryptionConstraint,
+  peerTrustGateContract,
+  encryptionRequirementContract,
+  signatureVerificationContract,
+  conflictResolutionContract,
+  encryptionAndSignatureContract,
+  trustedPeerEncryptionContract,
 } from './sync-authorization.js';
 
 export {
@@ -36,6 +48,12 @@ export {
   bruteForceProtectionRule,
   vaultMustBeInitializedConstraint,
   sessionActiveConstraint,
+  vaultInitializationGateContract,
+  sessionTimeoutContract,
+  biometricFallbackContract,
+  bruteForceProtectionContract,
+  vaultMustBeInitializedContract,
+  sessionActiveContract,
 } from './access-control.js';
 
 export {
