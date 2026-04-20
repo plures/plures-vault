@@ -79,22 +79,27 @@ export const bruteForceProtectionContract = defineContract({
 
 export const vaultMustBeInitializedContract = defineContract({
   ruleId: 'access-control.must-be-initialized',
-  behavior: 'Prevent unlock attempts on an uninitialized vault',
+  behavior: 'Block repeated unlock attempts on an uninitialized vault after at least one failed attempt',
   examples: [
     { given: 'isInitialized is false and failedAttempts > 0', when: 'constraint is checked', then: 'An error string is returned' },
-    { given: 'isInitialized is false and failedAttempts is 0', when: 'constraint is checked', then: 'true is returned' },
+    { given: 'isInitialized is false and failedAttempts is 0', when: 'constraint is checked', then: 'true is returned because the first attempt is allowed' },
+    { given: 'isInitialized is true', when: 'constraint is checked', then: 'true is returned' },
   ],
-  invariants: ['An initialized vault always passes this constraint'],
+  invariants: [
+    'An initialized vault always passes this constraint',
+    'An uninitialized vault is rejected only after one or more failed attempts',
+  ],
 });
 
 export const sessionActiveContract = defineContract({
   ruleId: 'access-control.session-active',
-  behavior: 'Require an active non-expired session for vault operations',
+  behavior: 'Require a non-expired session when the vault is unlocked',
   examples: [
-    { given: 'Session has expired (idle > timeout)', when: 'constraint is checked', then: 'An error string is returned' },
-    { given: 'Session is within the active timeout window', when: 'constraint is checked', then: 'true is returned' },
+    { given: 'Vault is unlocked and session has expired (idle > timeout)', when: 'constraint is checked', then: 'An error string is returned' },
+    { given: 'Vault is unlocked and session is within the active timeout window', when: 'constraint is checked', then: 'true is returned' },
+    { given: 'Vault is locked', when: 'constraint is checked', then: 'true is returned because expiration is only evaluated for unlocked sessions' },
   ],
-  invariants: ['An active session within the timeout window always passes'],
+  invariants: ['An unlocked session within the timeout window always passes', 'This constraint does not reject locked vault state'],
 });
 
 // ─── Rules ────────────────────────────────────────────────────────────────────

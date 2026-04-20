@@ -69,12 +69,13 @@ export const conflictResolutionContract = defineContract({
 
 export const encryptionAndSignatureContract = defineContract({
   ruleId: 'sync-authorization.encryption-and-signature-together',
-  behavior: 'Require both encryption and a valid signature for sync payloads',
+  behavior: 'Require a valid signature whenever a sync payload is encrypted',
   examples: [
     { given: 'isEncrypted is true but hasValidSignature is false', when: 'constraint is checked', then: 'An error string is returned' },
     { given: 'isEncrypted is true and hasValidSignature is true', when: 'constraint is checked', then: 'true is returned' },
+    { given: 'isEncrypted is false', when: 'constraint is checked', then: 'true is returned' },
   ],
-  invariants: ['A payload with both encryption and valid signature always passes'],
+  invariants: ['An encrypted payload without a valid signature never passes'],
 });
 
 export const trustedPeerEncryptionContract = defineContract({
