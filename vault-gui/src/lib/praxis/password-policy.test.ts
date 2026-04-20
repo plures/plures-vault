@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   createPraxisEngine,
   PraxisRegistry,
+  validateContracts,
 } from '@plures/praxis';
 import {
   passwordPolicyModule,
@@ -11,6 +12,12 @@ import {
   breachCheckRule,
   noRepeatingCharsConstraint,
   noCommonPatternsConstraint,
+  minimumLengthContract,
+  complexityContract,
+  entropyContract,
+  breachCheckContract,
+  noRepeatingCharsContract,
+  noCommonPatternsContract,
   calculateEntropy,
   type PasswordPolicyContext,
 } from './password-policy.js';
@@ -173,5 +180,25 @@ describe('noCommonPatternsConstraint', () => {
     const ctx = makeContext({ password: 'Correct!Horse9Battery' });
     const result = noCommonPatternsConstraint.impl(makeConstraintState(ctx));
     expect(result).toBe(true);
+  });
+});
+
+describe('password-policy contracts', () => {
+  it('all rules and constraints have contracts with no gaps', () => {
+    const registry = new PraxisRegistry<PasswordPolicyContext>();
+    registry.registerModule(passwordPolicyModule);
+    const report = validateContracts(registry);
+    expect(report.missing).toHaveLength(0);
+    expect(report.incomplete).toHaveLength(0);
+    expect(report.complete.length).toBe(6);
+  });
+
+  it('contracts have matching ruleIds', () => {
+    expect(minimumLengthContract.ruleId).toBe(minimumLengthRule.id);
+    expect(complexityContract.ruleId).toBe(complexityRule.id);
+    expect(entropyContract.ruleId).toBe(entropyRule.id);
+    expect(breachCheckContract.ruleId).toBe(breachCheckRule.id);
+    expect(noRepeatingCharsContract.ruleId).toBe(noRepeatingCharsConstraint.id);
+    expect(noCommonPatternsContract.ruleId).toBe(noCommonPatternsConstraint.id);
   });
 });

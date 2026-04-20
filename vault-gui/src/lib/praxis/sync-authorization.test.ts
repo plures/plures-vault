@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PraxisRegistry } from '@plures/praxis';
+import { PraxisRegistry, validateContracts } from '@plures/praxis';
 import {
   syncAuthorizationModule,
   peerTrustGateRule,
@@ -8,6 +8,12 @@ import {
   conflictResolutionRule,
   encryptionAndSignatureConstraint,
   trustedPeerEncryptionConstraint,
+  peerTrustGateContract,
+  encryptionRequirementContract,
+  signatureVerificationContract,
+  conflictResolutionContract,
+  encryptionAndSignatureContract,
+  trustedPeerEncryptionContract,
   type SyncAuthorizationContext,
 } from './sync-authorization.js';
 
@@ -138,5 +144,25 @@ describe('trustedPeerEncryptionConstraint', () => {
     const ctx = makeContext({ isTrustedPeer: true, isEncrypted: true });
     const result = trustedPeerEncryptionConstraint.impl(makeState(ctx));
     expect(result).toBe(true);
+  });
+});
+
+describe('sync-authorization contracts', () => {
+  it('all rules and constraints have contracts with no gaps', () => {
+    const registry = new PraxisRegistry<SyncAuthorizationContext>();
+    registry.registerModule(syncAuthorizationModule);
+    const report = validateContracts(registry);
+    expect(report.missing).toHaveLength(0);
+    expect(report.incomplete).toHaveLength(0);
+    expect(report.complete.length).toBe(6);
+  });
+
+  it('contracts have matching ruleIds', () => {
+    expect(peerTrustGateContract.ruleId).toBe(peerTrustGateRule.id);
+    expect(encryptionRequirementContract.ruleId).toBe(encryptionRequirementRule.id);
+    expect(signatureVerificationContract.ruleId).toBe(signatureVerificationRule.id);
+    expect(conflictResolutionContract.ruleId).toBe(conflictResolutionRule.id);
+    expect(encryptionAndSignatureContract.ruleId).toBe(encryptionAndSignatureConstraint.id);
+    expect(trustedPeerEncryptionContract.ruleId).toBe(trustedPeerEncryptionConstraint.id);
   });
 });

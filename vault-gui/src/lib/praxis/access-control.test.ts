@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PraxisRegistry } from '@plures/praxis';
+import { PraxisRegistry, validateContracts } from '@plures/praxis';
 import {
   accessControlModule,
   vaultInitializationGateRule,
@@ -8,6 +8,12 @@ import {
   bruteForceProtectionRule,
   vaultMustBeInitializedConstraint,
   sessionActiveConstraint,
+  vaultInitializationGateContract,
+  sessionTimeoutContract,
+  biometricFallbackContract,
+  bruteForceProtectionContract,
+  vaultMustBeInitializedContract,
+  sessionActiveContract,
   type AccessControlContext,
 } from './access-control.js';
 
@@ -157,5 +163,25 @@ describe('sessionActiveConstraint', () => {
     const ctx = makeContext({ lastUnlockTime: Date.now() });
     const result = sessionActiveConstraint.impl(makeConstraintState(ctx));
     expect(result).toBe(true);
+  });
+});
+
+describe('access-control contracts', () => {
+  it('all rules and constraints have contracts with no gaps', () => {
+    const registry = new PraxisRegistry<AccessControlContext>();
+    registry.registerModule(accessControlModule);
+    const report = validateContracts(registry);
+    expect(report.missing).toHaveLength(0);
+    expect(report.incomplete).toHaveLength(0);
+    expect(report.complete.length).toBe(6);
+  });
+
+  it('contracts have matching ruleIds', () => {
+    expect(vaultInitializationGateContract.ruleId).toBe(vaultInitializationGateRule.id);
+    expect(sessionTimeoutContract.ruleId).toBe(sessionTimeoutRule.id);
+    expect(biometricFallbackContract.ruleId).toBe(biometricFallbackRule.id);
+    expect(bruteForceProtectionContract.ruleId).toBe(bruteForceProtectionRule.id);
+    expect(vaultMustBeInitializedContract.ruleId).toBe(vaultMustBeInitializedConstraint.id);
+    expect(sessionActiveContract.ruleId).toBe(sessionActiveConstraint.id);
   });
 });
