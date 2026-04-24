@@ -1,29 +1,28 @@
-# plures-vault Roadmap
+# Plures Vault Roadmap
 
-## Role in Plures Ecosystem
-plures-vault is the zero-trust secret manager for Plures, combining encrypted storage, graph-native relationships, P2P sync, and MCP tooling for AI agents. It anchors secure credential handling across the ecosystem.
+## Role in OASIS
+Plures Vault is the security and credential layer for OASIS. It demonstrates zero‑knowledge, local‑first secret management and P2P sync, proving OASIS crypto patterns and privacy guarantees in a real product. It is also the reference MCP service for secure agent access to sensitive data.
 
 ## Current State
-Core vault CLI, crypto, graph relationships, MCP server, and PluresDB-based sync are implemented. Browser extension and GUI work exist but are not fully productized. Enterprise features (Azure Key Vault sync, audit trails) are partially scoped.
+- Rust/Tauri CLI with graph‑native secret model
+- Argon2 + AES‑256‑GCM encryption, zero‑knowledge design
+- PluresDB CRDT replication for device‑to‑device sync (early)
+- MCP server for agent access
 
-## Milestones
+## Near Term (v0.2–0.3)
+- Harden vault init / recovery flows (seed backup, rotation, export)
+- Complete P2P sync UX + conflict handling
+- Expand MCP surface with least‑privilege scopes and audit logs
+- Add deterministic test vectors + cryptographic validation suite
 
-### Near-term (Q2 2026)
-- Stabilize browser extension and GUI MVP for daily use.
-- Harden sync flows (conflict handling, device enrollment).
-- Add audit log schema and export tooling.
-- Improve onboarding (import/export, migration guides).
-- Expand automated tests for crypto + graph integrity.
+## Mid Term (v0.4–0.6)
+- Browser extension + desktop pairing flow
+- Device trust graph (approved devices, revocation, quarantine)
+- Vault policies wired to praxis rules for OASIS privacy enforcement
+- Encrypted sharing primitives (group secrets, time‑boxed grants)
 
-### Mid-term (Q3–Q4 2026)
-- Implement secure sharing workflows (team vaults, permissions).
-- Add policy controls (rotation reminders, password hygiene).
-- Integrate Azure Key Vault bidirectional sync.
-- Release MCP integration guides and agent examples.
-- Support multiple vault partitions with licensing hooks.
-
-### Long-term
-- Full enterprise compliance suite (SOC2-ready audit reports).
-- Cross-platform mobile clients with offline-first sync.
-- Plures ecosystem single-sign-on and identity federation.
-- Trusted hardware integration (TPM/SE) for key storage.
+## Long Term (v1.0+)
+- ZK proof integration for OASIS commerce flows (prove access without revealing secrets)
+- Enterprise integration hardened (Key Vault, SSO, policy gates)
+- Multi‑tenant vaults for OASIS orgs and marketplaces
+- Security certification / formal verification track
