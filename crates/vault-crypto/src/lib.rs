@@ -90,17 +90,31 @@ impl VaultCrypto {
 
     /// Encrypt data using AES-256-GCM
     pub fn encrypt(&self, master_key: &MasterKey, plaintext: &str) -> Result<EncryptedData, CryptoError> {
+        // Ensure we have exactly 32 bytes for AES-256
+        let mut key_bytes = [0u8; 32];
+        let len = std::cmp::min(master_key.key.len(), 32);
+        key_bytes[..len].copy_from_slice(&master_key.key[..len]);
+        
+        let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
+        let cipher = Aes256Gcm::new(key);
+        
         let nonce = Aes256Gcm::generate_nonce(&mut OsRng);
-        let nonce_arr: [u8; 12] = nonce.into();
-        self.encrypt_with_nonce(master_key, plaintext, &nonce_arr)
+        let ciphertext = cipher
+            .encrypt(&nonce, plaintext.as_bytes())
+            .map_err(|_| CryptoError::EncryptionError)?;
+
+        Ok(EncryptedData {
+            ciphertext: general_purpose::STANDARD.encode(&ciphertext),
+            nonce: general_purpose::STANDARD.encode(nonce),
+        })
     }
 
     /// Encrypt data using AES-256-GCM with a caller-supplied nonce.
     ///
-    /// # Safety
     /// Reusing a nonce with the same key is catastrophic for AES-GCM security.
-    /// This method exists for deterministic test vectors only.
-    pub fn encrypt_with_nonce(
+    /// This method is test-only and not compiled into release builds.
+    #[cfg(test)]
+    fn encrypt_with_nonce(
         &self,
         master_key: &MasterKey,
         plaintext: &str,
@@ -252,18 +266,15 @@ mod deterministic_vectors {
 
     #[test]
     fn argon2_snapshot_vector() {
-        // Derive once with the fixed salt and record the base64-encoded key.
-        // If this test breaks, the Argon2 parameters or library have changed.
+        // Hardcoded expected value for Argon2id with default params, fixed salt, and
+        // password "snapshot_password". If this breaks, Argon2 params or lib changed.
+        const EXPECTED_KEY_B64: &str = "NWhFTVssGiDZvl4utXUim1C/hZ2w7KheSo8SJ+3tby0=";
+
         let crypto = VaultCrypto::new();
         let (key, _) = crypto.derive_master_key("snapshot_password", Some(FIXED_SALT)).unwrap();
-
         let encoded = general_purpose::STANDARD.encode(&key.key);
 
-        // Re-derive and compare — acts as a snapshot regression guard.
-        let (key2, _) = crypto.derive_master_key("snapshot_password", Some(FIXED_SALT)).unwrap();
-        let encoded2 = general_purpose::STANDARD.encode(&key2.key);
-
-        assert_eq!(encoded, encoded2, "Argon2 snapshot vector must be stable across runs");
+        assert_eq!(encoded, EXPECTED_KEY_B64, "Argon2 snapshot vector changed — check params/library version");
     }
 
     // -- AES-256-GCM deterministic encryption --------------------------------
@@ -323,17 +334,15 @@ mod deterministic_vectors {
 
         let encrypted = crypto.encrypt_with_nonce(&key, plaintext, &nonce).unwrap();
 
-        // Persist the expected value inline as a regression anchor.
-        let expected_ciphertext = encrypted.ciphertext.clone();
-        let expected_nonce = encrypted.nonce.clone();
+        // Hardcoded expected ciphertext for key 0x00..0x1f, zero nonce, plaintext "snapshot".
+        const EXPECTED_CT: &str = "fdLUrsZE7Mk4OC4/CP+0RN3mtlUYVVgs";
+        const EXPECTED_NONCE: &str = "AAAAAAAAAAAAAAAA";
 
-        // Re-encrypt and compare.
-        let encrypted2 = crypto.encrypt_with_nonce(&key, plaintext, &nonce).unwrap();
-        assert_eq!(encrypted2.ciphertext, expected_ciphertext, "AES-GCM snapshot ciphertext must be stable");
-        assert_eq!(encrypted2.nonce, expected_nonce);
+        assert_eq!(encrypted.ciphertext, EXPECTED_CT, "AES-GCM snapshot ciphertext changed — check library version");
+        assert_eq!(encrypted.nonce, EXPECTED_NONCE);
 
-        // Also verify decryption of the snapshot.
-        let decrypted = crypto.decrypt(&key, &encrypted2).unwrap();
+        // Verify decryption of the snapshot.
+        let decrypted = crypto.decrypt(&key, &encrypted).unwrap();
         assert_eq!(decrypted, plaintext);
     }
 
