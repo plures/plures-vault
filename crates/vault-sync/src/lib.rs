@@ -346,6 +346,8 @@ impl SyncManager {
         conflict_id: Uuid,
         winner: ConflictWinner,
     ) -> Result<ConflictRecord> {
+        // Acquire locks in the same order as record_conflict: stats → conflicts
+        let mut stats = self.stats.lock().await;
         let mut conflicts = self.conflicts.lock().await;
         let record = conflicts
             .get_mut(&conflict_id)
@@ -355,7 +357,6 @@ impl SyncManager {
             return Ok(record.clone());
         }
 
-        let mut stats = self.stats.lock().await;
         self.apply_resolution(record, winner, &mut stats)?;
 
         Ok(record.clone())
@@ -737,6 +738,6 @@ mod tests {
 
         // Should have received a ConflictDetected event
         let event = rx.try_recv().unwrap();
-        matches!(event, VaultSyncEvent::ConflictDetected { .. });
+        assert!(matches!(event, VaultSyncEvent::ConflictDetected { .. }));
     }
 }
