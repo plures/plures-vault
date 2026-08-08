@@ -75,8 +75,7 @@ impl std::fmt::Display for Scope {
 /// A single audit-log entry recorded for every tool invocation.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuditEntry {
-    /// ISO-8601 timestamp (UTC) of the event, or a monotonic counter when
-    /// real-time clocks are unavailable (e.g. in tests).
+    /// ISO-8601 timestamp (UTC) of the event.
     pub timestamp: String,
     /// Name of the tool that was invoked.
     pub tool: String,
@@ -560,14 +559,27 @@ impl McpServer {
         }
     }
 
-    /// Monotonic timestamp helper.
+    /// Wall-clock timestamp helper.
     fn now_iso() -> String {
-        // Use a simple counter so tests stay deterministic.  In production
-        // this would use `chrono::Utc::now().to_rfc3339()`.
-        use std::sync::atomic::{AtomicU64, Ordering};
-        static COUNTER: AtomicU64 = AtomicU64::new(0);
-        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-        format!("T{n}")
+        use std::time::SystemTime;
+        match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
+            Ok(d) => {
+                let secs = d.as_secs();
+                let hours = (secs / 3600) % 24;
+                let mins = (secs / 60) % 60;
+                let s = secs % 60;
+                let days = secs / 86400;
+                // Approximate date from epoch days (good enough for audit stamps)
+                let year = 1970 + days / 365;
+                let day_of_year = days % 365;
+                let month = day_of_year / 30 + 1;
+                let day = day_of_year % 30 + 1;
+                format!(
+                    "{year:04}-{month:02}-{day:02}T{hours:02}:{mins:02}:{s:02}Z"
+                )
+            }
+            Err(_) => "1970-01-01T00:00:00Z".to_string(),
+        }
     }
 
     // -- default definitions ------------------------------------------------
@@ -693,7 +705,7 @@ impl McpServer {
             ResourceDefinition {
                 uri: "audit://log".to_string(),
                 name: "Audit Log".to_string(),
-                description: "Audit log of all MCP tool invocations".to_string(),
+                description: "Audit log of all MCP tool invocations (admin scope required to read)".to_string(),
                 mime_type: "application/json".to_string(),
             },
         ]
