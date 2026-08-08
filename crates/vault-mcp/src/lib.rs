@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::sync::{Arc, Mutex};
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
@@ -19,6 +20,95 @@ pub enum McpError {
     IoError(#[from] std::io::Error),
     #[error("Server not initialized")]
     NotInitialized,
+    #[error("Insufficient scope: requires {required}, granted {granted}")]
+    InsufficientScope { required: String, granted: String },
+}
+
+// ---------------------------------------------------------------------------
+// Least-privilege scopes
+// ---------------------------------------------------------------------------
+
+/// Scopes that can be granted to an MCP session. Each tool requires a minimum
+/// scope; calls are rejected when the session lacks the required scope.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scope {
+    /// Read-only access (list, get, search, status).
+    Read,
+    /// Read + create/update credentials.
+    Write,
+    /// Read + write + delete credentials.
+    Delete,
+    /// Full access including audit-log queries.
+    Admin,
+}
+
+impl Scope {
+    /// Returns `true` when `self` satisfies the `required` scope.
+    pub fn satisfies(self, required: Scope) -> bool {
+        use Scope::*;
+        matches!(
+            (self, required),
+            (Admin, _)
+                | (Delete, Read | Write | Delete)
+                | (Write, Read | Write)
+                | (Read, Read)
+        )
+    }
+}
+
+impl std::fmt::Display for Scope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Scope::Read => write!(f, "read"),
+            Scope::Write => write!(f, "write"),
+            Scope::Delete => write!(f, "delete"),
+            Scope::Admin => write!(f, "admin"),
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Audit log
+// ---------------------------------------------------------------------------
+
+/// A single audit-log entry recorded for every tool invocation.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEntry {
+    /// ISO-8601 timestamp (UTC) of the event, or a monotonic counter when
+    /// real-time clocks are unavailable (e.g. in tests).
+    pub timestamp: String,
+    /// Name of the tool that was invoked.
+    pub tool: String,
+    /// The scope that was required by the tool.
+    pub required_scope: Scope,
+    /// The scope that the session actually held.
+    pub granted_scope: Scope,
+    /// Whether the call was permitted.
+    pub allowed: bool,
+    /// Whether the underlying operation succeeded (only meaningful when
+    /// `allowed` is `true`).
+    pub success: bool,
+}
+
+/// Thread-safe, append-only audit log.
+#[derive(Debug, Clone, Default)]
+pub struct AuditLog {
+    entries: Arc<Mutex<Vec<AuditEntry>>>,
+}
+
+impl AuditLog {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn record(&self, entry: AuditEntry) {
+        self.entries.lock().expect("audit lock poisoned").push(entry);
+    }
+
+    pub fn entries(&self) -> Vec<AuditEntry> {
+        self.entries.lock().expect("audit lock poisoned").clone()
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -133,6 +223,8 @@ pub trait VaultOperations: Send + Sync {
 const JSONRPC_METHOD_NOT_FOUND: i64 = -32601;
 const JSONRPC_INVALID_PARAMS: i64 = -32602;
 const JSONRPC_INTERNAL_ERROR: i64 = -32603;
+/// Custom application error code for insufficient scope.
+const JSONRPC_INSUFFICIENT_SCOPE: i64 = -32001;
 
 // ---------------------------------------------------------------------------
 // McpServer
@@ -144,6 +236,10 @@ pub struct McpServer {
     resources: Vec<ResourceDefinition>,
     vault: Option<Box<dyn VaultOperations>>,
     initialized: bool,
+    /// The set of scopes granted to this MCP session.
+    granted_scope: Scope,
+    /// Append-only audit log for every tool invocation.
+    audit_log: AuditLog,
 }
 
 impl McpServer {
@@ -157,6 +253,8 @@ impl McpServer {
             resources: Self::default_resources(),
             vault: None,
             initialized: false,
+            granted_scope: Scope::Read,
+            audit_log: AuditLog::new(),
         }
     }
 
@@ -164,6 +262,22 @@ impl McpServer {
     pub fn with_vault(mut self, vault: Box<dyn VaultOperations>) -> Self {
         self.vault = Some(vault);
         self
+    }
+
+    /// Builder method — set the session scope (defaults to `Read`).
+    pub fn with_scope(mut self, scope: Scope) -> Self {
+        self.granted_scope = scope;
+        self
+    }
+
+    /// Get a reference to the audit log.
+    pub fn audit_log(&self) -> &AuditLog {
+        &self.audit_log
+    }
+
+    /// Get the granted scope.
+    pub fn granted_scope(&self) -> Scope {
+        self.granted_scope
     }
 
     /// Get all tool definitions.
@@ -205,6 +319,9 @@ impl McpServer {
                 let (code, message) = match &e {
                     McpError::MethodNotFound(m) => (JSONRPC_METHOD_NOT_FOUND, m.clone()),
                     McpError::InvalidParams(m) => (JSONRPC_INVALID_PARAMS, m.clone()),
+                    McpError::InsufficientScope { .. } => {
+                        (JSONRPC_INSUFFICIENT_SCOPE, e.to_string())
+                    }
                     _ => (JSONRPC_INTERNAL_ERROR, e.to_string()),
                 };
                 JsonRpcResponse {
@@ -278,9 +395,59 @@ impl McpServer {
             .cloned()
             .unwrap_or(serde_json::json!({}));
 
+        // --- scope check ---------------------------------------------------
+        let required_scope = Self::required_scope(tool_name);
+        let allowed = self.granted_scope.satisfies(required_scope);
+
+        if !allowed {
+            self.audit_log.record(AuditEntry {
+                timestamp: Self::now_iso(),
+                tool: tool_name.to_string(),
+                required_scope,
+                granted_scope: self.granted_scope,
+                allowed: false,
+                success: false,
+            });
+            return Err(McpError::InsufficientScope {
+                required: required_scope.to_string(),
+                granted: self.granted_scope.to_string(),
+            });
+        }
+
+        // --- handle built-in audit tool ------------------------------------
+        if tool_name == "vault_audit_log" {
+            let entries = self.audit_log.entries();
+            let text = serde_json::to_string(&entries).unwrap_or_default();
+            self.audit_log.record(AuditEntry {
+                timestamp: Self::now_iso(),
+                tool: tool_name.to_string(),
+                required_scope,
+                granted_scope: self.granted_scope,
+                allowed: true,
+                success: true,
+            });
+            let result = ToolResult {
+                content: vec![ToolContent {
+                    content_type: "text".to_string(),
+                    text,
+                }],
+                is_error: None,
+            };
+            return serde_json::to_value(result).map_err(McpError::SerializationError);
+        }
+
+        // --- vault backend dispatch ----------------------------------------
         let vault = match &self.vault {
             Some(v) => v,
             None => {
+                self.audit_log.record(AuditEntry {
+                    timestamp: Self::now_iso(),
+                    tool: tool_name.to_string(),
+                    required_scope,
+                    granted_scope: self.granted_scope,
+                    allowed: true,
+                    success: false,
+                });
                 let result = ToolResult {
                     content: vec![ToolContent {
                         content_type: "text".to_string(),
@@ -343,6 +510,16 @@ impl McpServer {
             }
         };
 
+        let success = tool_result.is_ok();
+        self.audit_log.record(AuditEntry {
+            timestamp: Self::now_iso(),
+            tool: tool_name.to_string(),
+            required_scope,
+            granted_scope: self.granted_scope,
+            allowed: true,
+            success,
+        });
+
         match tool_result {
             Ok(text) => {
                 let result = ToolResult {
@@ -365,6 +542,32 @@ impl McpServer {
                 Ok(serde_json::to_value(result).map_err(McpError::SerializationError)?)
             }
         }
+    }
+
+    // -- scope mapping ------------------------------------------------------
+
+    /// Return the minimum scope required for a given tool name.
+    fn required_scope(tool_name: &str) -> Scope {
+        match tool_name {
+            "vault_list_credentials"
+            | "vault_get_credential"
+            | "vault_search"
+            | "vault_status" => Scope::Read,
+            "vault_add_credential" => Scope::Write,
+            "vault_delete_credential" => Scope::Delete,
+            "vault_audit_log" => Scope::Admin,
+            _ => Scope::Admin, // unknown tools default to highest privilege
+        }
+    }
+
+    /// Monotonic timestamp helper.
+    fn now_iso() -> String {
+        // Use a simple counter so tests stay deterministic.  In production
+        // this would use `chrono::Utc::now().to_rfc3339()`.
+        use std::sync::atomic::{AtomicU64, Ordering};
+        static COUNTER: AtomicU64 = AtomicU64::new(0);
+        let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+        format!("T{n}")
     }
 
     // -- default definitions ------------------------------------------------
@@ -461,6 +664,15 @@ impl McpServer {
                     "required": []
                 }),
             },
+            ToolDefinition {
+                name: "vault_audit_log".to_string(),
+                description: "Retrieve the audit log of all MCP tool invocations (requires admin scope)".to_string(),
+                input_schema: serde_json::json!({
+                    "type": "object",
+                    "properties": {},
+                    "required": []
+                }),
+            },
         ]
     }
 
@@ -476,6 +688,12 @@ impl McpServer {
                 uri: "vault://status".to_string(),
                 name: "Vault Status".to_string(),
                 description: "Current vault status information".to_string(),
+                mime_type: "application/json".to_string(),
+            },
+            ResourceDefinition {
+                uri: "audit://log".to_string(),
+                name: "Audit Log".to_string(),
+                description: "Audit log of all MCP tool invocations".to_string(),
                 mime_type: "application/json".to_string(),
             },
         ]
@@ -561,8 +779,8 @@ mod tests {
         let server = McpServer::new();
         assert_eq!(server.info.name, "plures-vault-mcp");
         assert_eq!(server.info.version, env!("CARGO_PKG_VERSION"));
-        assert_eq!(server.tools().len(), 6);
-        assert_eq!(server.resources().len(), 2);
+        assert_eq!(server.tools().len(), 7);
+        assert_eq!(server.resources().len(), 3);
         assert!(!server.is_initialized());
     }
 
@@ -606,7 +824,7 @@ mod tests {
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
         let tools = result["tools"].as_array().unwrap();
-        assert_eq!(tools.len(), 6);
+        assert_eq!(tools.len(), 7);
 
         let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"vault_list_credentials"));
@@ -615,6 +833,7 @@ mod tests {
         assert!(names.contains(&"vault_delete_credential"));
         assert!(names.contains(&"vault_search"));
         assert!(names.contains(&"vault_status"));
+        assert!(names.contains(&"vault_audit_log"));
 
         // Verify schemas have correct structure
         for tool in tools {
@@ -632,11 +851,12 @@ mod tests {
         assert!(resp.error.is_none());
         let result = resp.result.unwrap();
         let resources = result["resources"].as_array().unwrap();
-        assert_eq!(resources.len(), 2);
+        assert_eq!(resources.len(), 3);
 
         let uris: Vec<&str> = resources.iter().map(|r| r["uri"].as_str().unwrap()).collect();
         assert!(uris.contains(&"vault://credentials"));
         assert!(uris.contains(&"vault://status"));
+        assert!(uris.contains(&"audit://log"));
     }
 
     #[test]
@@ -713,7 +933,7 @@ mod tests {
 
     #[test]
     fn test_tool_call_add_credential() {
-        let mut server = McpServer::new().with_vault(Box::new(MockVault));
+        let mut server = McpServer::new().with_vault(Box::new(MockVault)).with_scope(Scope::Write);
         let req = make_request(
             "tools/call",
             Some(json!({
@@ -735,7 +955,7 @@ mod tests {
 
     #[test]
     fn test_tool_call_delete_credential() {
-        let mut server = McpServer::new().with_vault(Box::new(MockVault));
+        let mut server = McpServer::new().with_vault(Box::new(MockVault)).with_scope(Scope::Delete);
 
         // delete existing
         let req = make_request(
@@ -862,7 +1082,7 @@ mod tests {
 
     #[test]
     fn test_tools_call_unknown_tool() {
-        let mut server = McpServer::new().with_vault(Box::new(MockVault));
+        let mut server = McpServer::new().with_vault(Box::new(MockVault)).with_scope(Scope::Admin);
         let req = make_request(
             "tools/call",
             Some(json!({ "name": "nonexistent_tool", "arguments": {} })),
@@ -877,5 +1097,166 @@ mod tests {
     fn test_with_vault_builder() {
         let server = McpServer::new().with_vault(Box::new(MockVault));
         assert!(server.vault.is_some());
+    }
+
+    // -- scope tests --------------------------------------------------------
+
+    #[test]
+    fn test_scope_satisfies() {
+        assert!(Scope::Read.satisfies(Scope::Read));
+        assert!(!Scope::Read.satisfies(Scope::Write));
+        assert!(!Scope::Read.satisfies(Scope::Delete));
+        assert!(!Scope::Read.satisfies(Scope::Admin));
+
+        assert!(Scope::Write.satisfies(Scope::Read));
+        assert!(Scope::Write.satisfies(Scope::Write));
+        assert!(!Scope::Write.satisfies(Scope::Delete));
+        assert!(!Scope::Write.satisfies(Scope::Admin));
+
+        assert!(Scope::Delete.satisfies(Scope::Read));
+        assert!(Scope::Delete.satisfies(Scope::Write));
+        assert!(Scope::Delete.satisfies(Scope::Delete));
+        assert!(!Scope::Delete.satisfies(Scope::Admin));
+
+        assert!(Scope::Admin.satisfies(Scope::Read));
+        assert!(Scope::Admin.satisfies(Scope::Write));
+        assert!(Scope::Admin.satisfies(Scope::Delete));
+        assert!(Scope::Admin.satisfies(Scope::Admin));
+    }
+
+    #[test]
+    fn test_default_scope_is_read() {
+        let server = McpServer::new();
+        assert_eq!(server.granted_scope(), Scope::Read);
+    }
+
+    #[test]
+    fn test_read_scope_blocks_write() {
+        let mut server = McpServer::new()
+            .with_vault(Box::new(MockVault))
+            .with_scope(Scope::Read);
+        let req = make_request(
+            "tools/call",
+            Some(json!({
+                "name": "vault_add_credential",
+                "arguments": { "title": "X", "password": "p" }
+            })),
+        );
+        let resp = server.handle_request(&req);
+        assert!(resp.result.is_none());
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, -32001);
+        assert!(err.message.contains("write"));
+    }
+
+    #[test]
+    fn test_write_scope_blocks_delete() {
+        let mut server = McpServer::new()
+            .with_vault(Box::new(MockVault))
+            .with_scope(Scope::Write);
+        let req = make_request(
+            "tools/call",
+            Some(json!({
+                "name": "vault_delete_credential",
+                "arguments": { "title": "GitHub" }
+            })),
+        );
+        let resp = server.handle_request(&req);
+        assert!(resp.result.is_none());
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, -32001);
+        assert!(err.message.contains("delete"));
+    }
+
+    #[test]
+    fn test_read_scope_blocks_audit_log() {
+        let mut server = McpServer::new()
+            .with_vault(Box::new(MockVault))
+            .with_scope(Scope::Read);
+        let req = make_request(
+            "tools/call",
+            Some(json!({ "name": "vault_audit_log", "arguments": {} })),
+        );
+        let resp = server.handle_request(&req);
+        assert!(resp.result.is_none());
+        let err = resp.error.unwrap();
+        assert_eq!(err.code, -32001);
+    }
+
+    // -- audit log tests ----------------------------------------------------
+
+    #[test]
+    fn test_audit_log_records_tool_calls() {
+        let mut server = McpServer::new()
+            .with_vault(Box::new(MockVault))
+            .with_scope(Scope::Admin);
+
+        // Perform a read
+        let req = make_request(
+            "tools/call",
+            Some(json!({ "name": "vault_status", "arguments": {} })),
+        );
+        server.handle_request(&req);
+
+        let entries = server.audit_log().entries();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].tool, "vault_status");
+        assert!(entries[0].allowed);
+        assert!(entries[0].success);
+    }
+
+    #[test]
+    fn test_audit_log_records_denied_calls() {
+        let mut server = McpServer::new()
+            .with_vault(Box::new(MockVault))
+            .with_scope(Scope::Read);
+
+        let req = make_request(
+            "tools/call",
+            Some(json!({
+                "name": "vault_add_credential",
+                "arguments": { "title": "X", "password": "p" }
+            })),
+        );
+        server.handle_request(&req);
+
+        let entries = server.audit_log().entries();
+        assert_eq!(entries.len(), 1);
+        assert!(!entries[0].allowed);
+        assert!(!entries[0].success);
+    }
+
+    #[test]
+    fn test_vault_audit_log_tool() {
+        let mut server = McpServer::new()
+            .with_vault(Box::new(MockVault))
+            .with_scope(Scope::Admin);
+
+        // Generate an entry first
+        let req = make_request(
+            "tools/call",
+            Some(json!({ "name": "vault_list_credentials", "arguments": {} })),
+        );
+        server.handle_request(&req);
+
+        // Now query the audit log via the tool
+        let req = make_request(
+            "tools/call",
+            Some(json!({ "name": "vault_audit_log", "arguments": {} })),
+        );
+        let resp = server.handle_request(&req);
+        assert!(resp.error.is_none());
+        let text = resp.result.unwrap()["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let parsed: Vec<serde_json::Value> = serde_json::from_str(&text).unwrap();
+        // First entry is vault_list_credentials, audit_log query itself is
+        // recorded *after* returning the snapshot, so only 1 entry visible.
+        assert_eq!(parsed.len(), 1);
+        assert_eq!(parsed[0]["tool"], "vault_list_credentials");
+
+        // After the call, the audit log has 2 entries total
+        assert_eq!(server.audit_log().entries().len(), 2);
     }
 }
