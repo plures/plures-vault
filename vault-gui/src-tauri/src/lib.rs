@@ -2,6 +2,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
 use vault_core::VaultManager;
+use vault_sync::{ConflictStrategy, ConflictWinner, SyncManager};
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
@@ -286,6 +287,142 @@ async fn delete_credential(
     Ok(())
 }
 
+// ── Sync types for Tauri IPC ──────────────────────────────────────────────────
+
+#[derive(Serialize, Deserialize)]
+pub struct SyncStatusData {
+    pub running: bool,
+    pub peer_id: String,
+    pub strategy: String,
+    pub peers_connected: usize,
+    pub events_sent: u64,
+    pub events_received: u64,
+    pub conflicts_detected: u64,
+    pub conflicts_resolved: u64,
+    pub last_sync: Option<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct ConflictData {
+    pub id: String,
+    pub node_id: String,
+    pub local_peer_id: String,
+    pub local_updated_at: String,
+    pub remote_peer_id: String,
+    pub remote_updated_at: String,
+    pub detected_at: String,
+    pub resolved: bool,
+    pub winner: Option<String>,
+    pub strategy: Option<String>,
+}
+
+#[tauri::command]
+async fn get_sync_status(
+    _app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<SyncStatusData, String> {
+    let database_path = {
+        let path_guard = state.vault_database_path.lock().unwrap();
+        path_guard.as_ref()
+            .ok_or("Vault not initialized")?
+            .clone()
+    };
+
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to create vault manager: {}", e))?;
+
+    let config = vault_manager.get_vault_config().await
+        .map_err(|e| e.to_string())?;
+
+    let sync_manager = SyncManager::new(vault_manager.store(), config.vault_id);
+    let stats = sync_manager.stats().await;
+
+    Ok(SyncStatusData {
+        running: sync_manager.is_running(),
+        peer_id: sync_manager.local_peer_id().to_string(),
+        strategy: format!("{:?}", sync_manager.conflict_strategy()),
+        peers_connected: stats.peers_connected,
+        events_sent: stats.events_sent,
+        events_received: stats.events_received,
+        conflicts_detected: stats.conflicts_detected,
+        conflicts_resolved: stats.conflicts_resolved,
+        last_sync: stats.last_sync.map(|t| t.to_rfc3339()),
+    })
+}
+
+#[tauri::command]
+async fn list_sync_conflicts(
+    _app: AppHandle,
+    state: State<'_, AppState>,
+    pending_only: bool,
+) -> Result<Vec<ConflictData>, String> {
+    let database_path = {
+        let path_guard = state.vault_database_path.lock().unwrap();
+        path_guard.as_ref()
+            .ok_or("Vault not initialized")?
+            .clone()
+    };
+
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to create vault manager: {}", e))?;
+
+    let config = vault_manager.get_vault_config().await
+        .map_err(|e| e.to_string())?;
+
+    let sync_manager = SyncManager::new(vault_manager.store(), config.vault_id);
+    let conflicts = sync_manager.list_conflicts(pending_only).await;
+
+    Ok(conflicts.into_iter().map(|c| ConflictData {
+        id: c.id.to_string(),
+        node_id: c.node_id,
+        local_peer_id: c.local_version.peer_id,
+        local_updated_at: c.local_version.updated_at.to_rfc3339(),
+        remote_peer_id: c.remote_version.peer_id,
+        remote_updated_at: c.remote_version.updated_at.to_rfc3339(),
+        detected_at: c.detected_at.to_rfc3339(),
+        resolved: c.resolved,
+        winner: c.resolution.as_ref().map(|r| format!("{:?}", r.winner)),
+        strategy: c.resolution.as_ref().map(|r| format!("{:?}", r.strategy)),
+    }).collect())
+}
+
+#[tauri::command]
+async fn resolve_sync_conflict(
+    _app: AppHandle,
+    state: State<'_, AppState>,
+    conflict_id: String,
+    winner: String,
+) -> Result<(), String> {
+    let database_path = {
+        let path_guard = state.vault_database_path.lock().unwrap();
+        path_guard.as_ref()
+            .ok_or("Vault not initialized")?
+            .clone()
+    };
+
+    let vault_manager = VaultManager::new(&database_path).await
+        .map_err(|e| format!("Failed to create vault manager: {}", e))?;
+
+    let config = vault_manager.get_vault_config().await
+        .map_err(|e| e.to_string())?;
+
+    let sync_manager = SyncManager::new(vault_manager.store(), config.vault_id);
+
+    let conflict_uuid = uuid::Uuid::parse_str(&conflict_id)
+        .map_err(|e| format!("Invalid conflict ID: {}", e))?;
+
+    let conflict_winner = match winner.as_str() {
+        "local" => ConflictWinner::Local,
+        "remote" => ConflictWinner::Remote,
+        _ => return Err("Invalid winner: must be 'local' or 'remote'".to_string()),
+    };
+
+    sync_manager.resolve_conflict(conflict_uuid, conflict_winner).await
+        .map_err(|e| e.to_string())?;
+
+    Ok(())
+}
+
 #[tauri::command]
 async fn close_splash(window: tauri::Window) {
     // Close splashscreen
@@ -377,6 +514,9 @@ pub fn run() {
             list_credentials,
             update_credential,
             delete_credential,
+            get_sync_status,
+            list_sync_conflicts,
+            resolve_sync_conflict,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
