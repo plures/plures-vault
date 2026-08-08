@@ -453,8 +453,14 @@ async fn main() -> Result<()> {
             }
 
             match vault.recover_with_key(&recovery_key, &new_pass).await {
-                Ok(config) => {
-                    println!("✅ Vault recovered and password reset (version {})", config.version);
+                Ok(result) => {
+                    println!("✅ Vault recovered and password reset (version {})", result.config.version);
+                    println!();
+                    println!("🔑 NEW RECOVERY KEY (store this in a safe place!):");
+                    println!("   {}", result.recovery_key);
+                    println!();
+                    println!("⚠️  This key is the ONLY way to recover your vault if you forget your master password.");
+                    println!("   It will NOT be shown again.");
                 }
                 Err(e) => {
                     eprintln!("❌ Recovery failed: {}", e);

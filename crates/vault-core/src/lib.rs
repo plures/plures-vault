@@ -109,6 +109,13 @@ pub struct VaultInitResult {
     pub recovery_key: String,
 }
 
+/// Result of vault recovery, includes new recovery key.
+#[derive(Debug, Clone)]
+pub struct VaultRecoverResult {
+    pub config: VaultConfig,
+    pub recovery_key: String,
+}
+
 /// Encrypted vault export for backup and recovery.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VaultExport {
@@ -678,11 +685,13 @@ impl VaultManager {
     }
 
     /// Recover vault access using the recovery key, setting a new master password.
+    /// Only works if the vault has no stored credentials (since they cannot be
+    /// re-encrypted without the old master key).
     pub async fn recover_with_key(
         &mut self,
         recovery_key: &str,
         new_password: &str,
-    ) -> Result<VaultConfig> {
+    ) -> Result<VaultRecoverResult> {
         // Verify recovery key against stored hash
         let recovery_hash = self
             .fetch_recovery_key_hash()
@@ -695,23 +704,24 @@ impl VaultManager {
             .verify_password(recovery_key.as_bytes(), &expected)
             .map_err(|_| VaultError::InvalidRecoveryKey)?;
 
-        // Recovery key is valid. Derive the old master key using the old salt
-        // so we can re-encrypt credentials with the new password.
-        let config = self.get_vault_config().await?;
-        let hash = self.fetch_password_hash()?;
+        // Refuse recovery if credentials exist — they are encrypted with the
+        // old key and cannot be re-encrypted without the old password.
+        let has_credentials = self
+            .store
+            .list()
+            .iter()
+            .any(|r| r.id.starts_with(CREDENTIAL_PREFIX));
+        if has_credentials {
+            return Err(VaultError::StorageError(
+                "Cannot recover vault with existing credentials. \
+                 Export your vault first using your current password, \
+                 then recover and re-import."
+                    .into(),
+            )
+            .into());
+        }
 
-        // We cannot derive the old master key without the old password.
-        // The recovery key proves ownership — we re-derive new key and
-        // re-encrypt the vault config. Credentials that were encrypted with
-        // the old key cannot be re-encrypted without the old key, so recovery
-        // resets the vault password but requires the vault to have no credentials
-        // or the old password to also be provided.
-        //
-        // For a full recovery flow, we set the new password hash so the user
-        // can unlock with the new password. Existing encrypted credentials
-        // remain encrypted with the OLD key. This is suitable for the case
-        // where the user forgot the master password but the vault is empty,
-        // or combined with an export/re-import flow.
+        let config = self.get_vault_config().await?;
 
         let (new_key, new_salt) = self.crypto.derive_master_key(new_password, None)?;
         let new_salt_string = SaltString::from_b64(&new_salt)
@@ -724,16 +734,14 @@ impl VaultManager {
             .to_string();
 
         // Generate new recovery key
-        let new_recovery_key_raw = generate_recovery_key();
+        let new_recovery_key = generate_recovery_key();
         let new_recovery_salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
         let new_recovery_hash = self
             .crypto
             .argon2
-            .hash_password(new_recovery_key_raw.as_bytes(), &new_recovery_salt)
+            .hash_password(new_recovery_key.as_bytes(), &new_recovery_salt)
             .map_err(|e| CryptoError::Argon2Error(e.to_string()))?
             .to_string();
-
-        let _ = hash; // old hash no longer needed
 
         let stored = StoredVaultConfig {
             vault_id: config.vault_id.to_string(),
@@ -751,13 +759,16 @@ impl VaultManager {
 
         self.master_key = Some(new_key);
 
-        Ok(VaultConfig {
-            vault_id: config.vault_id,
-            version: config.version + 1,
-            vault_name: config.vault_name,
-            salt: new_salt,
-            key_derivation_params: config.key_derivation_params,
-            created_at: config.created_at,
+        Ok(VaultRecoverResult {
+            config: VaultConfig {
+                vault_id: config.vault_id,
+                version: config.version + 1,
+                vault_name: config.vault_name,
+                salt: new_salt,
+                key_derivation_params: config.key_derivation_params,
+                created_at: config.created_at,
+            },
+            recovery_key: new_recovery_key,
         })
     }
 
@@ -1450,11 +1461,12 @@ mod tests {
 
         vault.lock();
 
-        let config = vault
+        let recover_result = vault
             .recover_with_key(&recovery_key, "recovered_password_789")
             .await
             .unwrap();
-        assert_eq!(config.version, 2);
+        assert_eq!(recover_result.config.version, 2);
+        assert!(!recover_result.recovery_key.is_empty());
         assert!(vault.is_unlocked());
     }
 
@@ -1466,6 +1478,25 @@ mod tests {
 
         assert!(vault
             .recover_with_key("bm90X2FfcmVhbF9rZXk=", "new_pass")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_recover_with_credentials_fails() {
+        let mut vault = create_vault().await;
+        let result = vault.init_vault("RecoveryVault", TEST_PASSWORD).await.unwrap();
+        let recovery_key = result.recovery_key.clone();
+
+        vault
+            .add_credential("SomeCred".into(), None, "pass".into(), None, None)
+            .await
+            .unwrap();
+        vault.lock();
+
+        // Recovery should fail when credentials exist
+        assert!(vault
+            .recover_with_key(&recovery_key, "new_pass")
             .await
             .is_err());
     }
