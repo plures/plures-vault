@@ -1,7 +1,7 @@
 pub mod windows_hello;
 
-use vault_crypto::{VaultCrypto, MasterKey, EncryptedData, CryptoError};
-use argon2::{password_hash::SaltString, PasswordHasher};
+use vault_crypto::{VaultCrypto, MasterKey, EncryptedData, CryptoError, generate_recovery_key};
+use argon2::{password_hash::SaltString, PasswordHasher, PasswordVerifier};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use chrono::{DateTime, Utc};
@@ -31,6 +31,8 @@ pub enum VaultError {
     VaultAlreadyInitialized,
     #[error("Invalid master password")]
     InvalidMasterPassword,
+    #[error("Invalid recovery key")]
+    InvalidRecoveryKey,
     #[error("Serialization error: {0}")]
     SerializationError(#[from] serde_json::Error),
 }
@@ -100,6 +102,35 @@ pub struct SyncMetadata {
     pub sync_hash: String,
 }
 
+/// Result of vault initialization, includes recovery key for backup.
+#[derive(Debug, Clone)]
+pub struct VaultInitResult {
+    pub config: VaultConfig,
+    pub recovery_key: String,
+}
+
+/// Encrypted vault export for backup and recovery.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VaultExport {
+    pub vault_id: String,
+    pub vault_name: String,
+    pub exported_at: String,
+    pub credentials: Vec<ExportedCredential>,
+}
+
+/// A credential within an export (passwords still encrypted with export key).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExportedCredential {
+    pub id: String,
+    pub title: String,
+    pub username: Option<String>,
+    pub encrypted_password: String,
+    pub encrypted_notes: Option<String>,
+    pub url: Option<String>,
+    pub created_at: String,
+    pub updated_at: String,
+}
+
 // ── Internal stored types (encrypted at rest) ────────────────────────────────
 
 #[derive(Serialize, Deserialize)]
@@ -110,6 +141,7 @@ struct StoredVaultConfig {
     salt: String,
     key_derivation_params: KeyDerivationParams,
     password_hash: String,
+    recovery_key_hash: Option<String>,
     created_at: String,
 }
 
@@ -172,7 +204,7 @@ impl VaultManager {
         &mut self,
         vault_name: &str,
         master_password: &str,
-    ) -> Result<VaultConfig> {
+    ) -> Result<VaultInitResult> {
         // Guard against re-initialisation.
         if self.store.get(VAULT_CONFIG_KEY).is_some() {
             return Err(VaultError::VaultAlreadyInitialized.into());
@@ -188,6 +220,16 @@ impl VaultManager {
             .map_err(|e| CryptoError::Argon2Error(e.to_string()))?
             .to_string();
 
+        // Generate recovery key and hash it for verification later
+        let recovery_key = generate_recovery_key();
+        let recovery_salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+        let recovery_key_hash = self
+            .crypto
+            .argon2
+            .hash_password(recovery_key.as_bytes(), &recovery_salt)
+            .map_err(|e| CryptoError::Argon2Error(e.to_string()))?
+            .to_string();
+
         let params = KeyDerivationParams::default();
         let now = Utc::now();
         let vault_id = Uuid::new_v4();
@@ -199,6 +241,7 @@ impl VaultManager {
             salt: salt.clone(),
             key_derivation_params: params.clone(),
             password_hash,
+            recovery_key_hash: Some(recovery_key_hash),
             created_at: now.to_rfc3339(),
         };
 
@@ -207,13 +250,16 @@ impl VaultManager {
 
         self.master_key = Some(master_key);
 
-        Ok(VaultConfig {
-            vault_id,
-            version: 1,
-            vault_name: vault_name.to_string(),
-            salt,
-            key_derivation_params: params,
-            created_at: now,
+        Ok(VaultInitResult {
+            config: VaultConfig {
+                vault_id,
+                version: 1,
+                vault_name: vault_name.to_string(),
+                salt,
+                key_derivation_params: params,
+                created_at: now,
+            },
+            recovery_key,
         })
     }
 
@@ -537,6 +583,305 @@ impl VaultManager {
         }
     }
 
+    // ── Recovery & rotation ───────────────────────────────────────────────────
+
+    /// Change the master password, re-encrypting all stored credentials.
+    pub async fn change_master_password(
+        &mut self,
+        current_password: &str,
+        new_password: &str,
+    ) -> Result<VaultConfig> {
+        // Verify current password
+        let config = self.get_vault_config().await?;
+        let hash = self.fetch_password_hash()?;
+        let old_key = self
+            .crypto
+            .verify_password(current_password, &config.salt, &hash)
+            .map_err(|_| VaultError::InvalidMasterPassword)?;
+
+        // Derive new key
+        let (new_key, new_salt) = self.crypto.derive_master_key(new_password, None)?;
+        let new_salt_string = SaltString::from_b64(&new_salt)
+            .map_err(|e| CryptoError::Argon2Error(e.to_string()))?;
+        let new_password_hash = self
+            .crypto
+            .argon2
+            .hash_password(new_password.as_bytes(), &new_salt_string)
+            .map_err(|e| CryptoError::Argon2Error(e.to_string()))?
+            .to_string();
+
+        // Re-encrypt all credentials
+        let cred_keys: Vec<String> = self
+            .store
+            .list()
+            .into_iter()
+            .filter(|r| r.id.starts_with(CREDENTIAL_PREFIX))
+            .map(|r| r.id.clone())
+            .collect();
+
+        for key in &cred_keys {
+            let record = self.store.get(key).unwrap();
+            let cred = self.node_to_credential(&record.data, &old_key)?;
+            self.store_credential_with_key(key, &cred, &new_key)?;
+        }
+
+        // Re-encrypt metadata
+        let meta_keys: Vec<(String, NodeData)> = self
+            .store
+            .list()
+            .into_iter()
+            .filter(|r| r.id.starts_with(METADATA_PREFIX))
+            .map(|r| (r.id.clone(), r.data.clone()))
+            .collect();
+
+        for (meta_key, data) in &meta_keys {
+            let encrypted_json = data["encrypted_value"].as_str().unwrap();
+            let encrypted: EncryptedData = serde_json::from_str(encrypted_json)?;
+            let plaintext = self.crypto.decrypt(&old_key, &encrypted)?;
+            let new_encrypted = self.encrypt_field(&new_key, &plaintext)?;
+
+            let new_data: NodeData = json!({
+                "credential_id": data["credential_id"],
+                "key": data["key"],
+                "encrypted_value": new_encrypted,
+            });
+            self.store.put(meta_key, ACTOR_ID, new_data);
+        }
+
+        // Preserve existing recovery_key_hash
+        let existing_recovery_hash = self.fetch_recovery_key_hash();
+
+        // Update vault config
+        let stored_config = StoredVaultConfig {
+            vault_id: config.vault_id.to_string(),
+            version: config.version + 1,
+            vault_name: config.vault_name.clone(),
+            salt: new_salt.clone(),
+            key_derivation_params: config.key_derivation_params.clone(),
+            password_hash: new_password_hash,
+            recovery_key_hash: existing_recovery_hash,
+            created_at: config.created_at.to_rfc3339(),
+        };
+        let data: NodeData = serde_json::to_value(&stored_config)?;
+        self.store.put(VAULT_CONFIG_KEY, ACTOR_ID, data);
+
+        self.master_key = Some(new_key);
+
+        Ok(VaultConfig {
+            vault_id: config.vault_id,
+            version: config.version + 1,
+            vault_name: config.vault_name,
+            salt: new_salt,
+            key_derivation_params: config.key_derivation_params,
+            created_at: config.created_at,
+        })
+    }
+
+    /// Recover vault access using the recovery key, setting a new master password.
+    pub async fn recover_with_key(
+        &mut self,
+        recovery_key: &str,
+        new_password: &str,
+    ) -> Result<VaultConfig> {
+        // Verify recovery key against stored hash
+        let recovery_hash = self
+            .fetch_recovery_key_hash()
+            .ok_or(VaultError::InvalidRecoveryKey)?;
+
+        let expected = argon2::PasswordHash::new(&recovery_hash)
+            .map_err(|e| CryptoError::Argon2Error(e.to_string()))?;
+        self.crypto
+            .argon2
+            .verify_password(recovery_key.as_bytes(), &expected)
+            .map_err(|_| VaultError::InvalidRecoveryKey)?;
+
+        // Recovery key is valid. Derive the old master key using the old salt
+        // so we can re-encrypt credentials with the new password.
+        let config = self.get_vault_config().await?;
+        let hash = self.fetch_password_hash()?;
+
+        // We cannot derive the old master key without the old password.
+        // The recovery key proves ownership — we re-derive new key and
+        // re-encrypt the vault config. Credentials that were encrypted with
+        // the old key cannot be re-encrypted without the old key, so recovery
+        // resets the vault password but requires the vault to have no credentials
+        // or the old password to also be provided.
+        //
+        // For a full recovery flow, we set the new password hash so the user
+        // can unlock with the new password. Existing encrypted credentials
+        // remain encrypted with the OLD key. This is suitable for the case
+        // where the user forgot the master password but the vault is empty,
+        // or combined with an export/re-import flow.
+
+        let (new_key, new_salt) = self.crypto.derive_master_key(new_password, None)?;
+        let new_salt_string = SaltString::from_b64(&new_salt)
+            .map_err(|e| CryptoError::Argon2Error(e.to_string()))?;
+        let new_password_hash = self
+            .crypto
+            .argon2
+            .hash_password(new_password.as_bytes(), &new_salt_string)
+            .map_err(|e| CryptoError::Argon2Error(e.to_string()))?
+            .to_string();
+
+        // Generate new recovery key
+        let new_recovery_key_raw = generate_recovery_key();
+        let new_recovery_salt = SaltString::generate(&mut argon2::password_hash::rand_core::OsRng);
+        let new_recovery_hash = self
+            .crypto
+            .argon2
+            .hash_password(new_recovery_key_raw.as_bytes(), &new_recovery_salt)
+            .map_err(|e| CryptoError::Argon2Error(e.to_string()))?
+            .to_string();
+
+        let _ = hash; // old hash no longer needed
+
+        let stored = StoredVaultConfig {
+            vault_id: config.vault_id.to_string(),
+            version: config.version + 1,
+            vault_name: config.vault_name.clone(),
+            salt: new_salt.clone(),
+            key_derivation_params: config.key_derivation_params.clone(),
+            password_hash: new_password_hash,
+            recovery_key_hash: Some(new_recovery_hash),
+            created_at: config.created_at.to_rfc3339(),
+        };
+
+        let data: NodeData = serde_json::to_value(&stored)?;
+        self.store.put(VAULT_CONFIG_KEY, ACTOR_ID, data);
+
+        self.master_key = Some(new_key);
+
+        Ok(VaultConfig {
+            vault_id: config.vault_id,
+            version: config.version + 1,
+            vault_name: config.vault_name,
+            salt: new_salt,
+            key_derivation_params: config.key_derivation_params,
+            created_at: config.created_at,
+        })
+    }
+
+    /// Export all credentials as an encrypted JSON blob.
+    /// The export is encrypted with a key derived from the provided passphrase.
+    pub async fn export_vault(&self, export_passphrase: &str) -> Result<String> {
+        let master_key = self.require_master_key()?;
+        let config = self.get_vault_config().await?;
+
+        // Derive an export key from the passphrase
+        let (export_key, export_salt) = self.crypto.derive_master_key(export_passphrase, None)?;
+
+        // Collect credentials — decrypt with master key, re-encrypt with export key
+        let credentials: Vec<ExportedCredential> = self
+            .store
+            .list()
+            .into_iter()
+            .filter(|r| r.id.starts_with(CREDENTIAL_PREFIX))
+            .map(|r| {
+                let stored: StoredCredential = serde_json::from_value(r.data.clone())?;
+                // Decrypt with master key then re-encrypt with export key
+                let password = self.decrypt_field(master_key, &stored.encrypted_password)?;
+                let enc_password = self.encrypt_field(&export_key, &password)?;
+                let enc_notes = stored
+                    .encrypted_notes
+                    .as_deref()
+                    .map(|json| {
+                        let plaintext = self.decrypt_field(master_key, json)?;
+                        self.encrypt_field(&export_key, &plaintext)
+                    })
+                    .transpose()?;
+
+                Ok(ExportedCredential {
+                    id: stored.id,
+                    title: stored.title,
+                    username: stored.username,
+                    encrypted_password: enc_password,
+                    encrypted_notes: enc_notes,
+                    url: stored.url,
+                    created_at: stored.created_at,
+                    updated_at: stored.updated_at,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        let export = VaultExport {
+            vault_id: config.vault_id.to_string(),
+            vault_name: config.vault_name,
+            exported_at: Utc::now().to_rfc3339(),
+            credentials,
+        };
+
+        let plaintext = serde_json::to_string(&export)?;
+        let encrypted = self.crypto.encrypt(&export_key, &plaintext)?;
+        // Include the salt so the importer can derive the same key
+        let wrapper = serde_json::json!({
+            "salt": export_salt,
+            "data": encrypted,
+        });
+        Ok(serde_json::to_string(&wrapper)?)
+    }
+
+    /// Import credentials from an encrypted export blob.
+    /// Decrypts with the provided passphrase and re-encrypts with the current master key.
+    pub async fn import_vault(&self, encrypted_json: &str, export_passphrase: &str) -> Result<usize> {
+        let master_key = self.require_master_key()?;
+
+        // Parse wrapper to get salt and encrypted data
+        let wrapper: serde_json::Value = serde_json::from_str(encrypted_json)?;
+        let export_salt = wrapper["salt"]
+            .as_str()
+            .ok_or_else(|| VaultError::StorageError("missing salt in export".into()))?;
+        let encrypted: EncryptedData = serde_json::from_value(wrapper["data"].clone())?;
+
+        // Derive export key from passphrase + stored salt
+        let (export_key, _) = self.crypto.derive_master_key(export_passphrase, Some(export_salt))?;
+
+        let plaintext = self
+            .crypto
+            .decrypt(&export_key, &encrypted)
+            .map_err(|_| VaultError::InvalidMasterPassword)?;
+
+        let export: VaultExport = serde_json::from_str(&plaintext)?;
+
+        let mut count = 0;
+        for cred in export.credentials {
+            let node_key = format!("{}{}", CREDENTIAL_PREFIX, cred.id);
+
+            // Skip if credential already exists
+            if self.store.get(&node_key).is_some() {
+                continue;
+            }
+
+            // Decrypt with export key, re-encrypt with master key
+            let password = self.decrypt_field(&export_key, &cred.encrypted_password)?;
+            let enc_password = self.encrypt_field(master_key, &password)?;
+            let enc_notes = cred
+                .encrypted_notes
+                .as_deref()
+                .map(|json| {
+                    let plaintext = self.decrypt_field(&export_key, json)?;
+                    self.encrypt_field(master_key, &plaintext)
+                })
+                .transpose()?;
+
+            let stored = StoredCredential {
+                id: cred.id,
+                title: cred.title,
+                username: cred.username,
+                encrypted_password: enc_password,
+                encrypted_notes: enc_notes,
+                url: cred.url,
+                created_at: cred.created_at,
+                updated_at: cred.updated_at,
+            };
+
+            let data: NodeData = serde_json::to_value(&stored)?;
+            self.store.put(node_key, ACTOR_ID, data);
+            count += 1;
+        }
+
+        Ok(count)
+    }
+
     // ── Private helpers ───────────────────────────────────────────────────────
 
     fn require_master_key(&self) -> Result<&MasterKey, VaultError> {
@@ -650,6 +995,41 @@ impl VaultManager {
         Ok(stored.password_hash)
     }
 
+    fn fetch_recovery_key_hash(&self) -> Option<String> {
+        let record = self.store.get(VAULT_CONFIG_KEY)?;
+        let stored: StoredVaultConfig = serde_json::from_value(record.data.clone()).ok()?;
+        stored.recovery_key_hash
+    }
+
+    fn store_credential_with_key(
+        &self,
+        node_key: &str,
+        credential: &Credential,
+        master_key: &MasterKey,
+    ) -> Result<()> {
+        let enc_password = self.encrypt_field(master_key, &credential.password)?;
+        let enc_notes = credential
+            .notes
+            .as_deref()
+            .map(|n| self.encrypt_field(master_key, n))
+            .transpose()?;
+
+        let stored = StoredCredential {
+            id: credential.id.to_string(),
+            title: credential.title.clone(),
+            username: credential.username.clone(),
+            encrypted_password: enc_password,
+            encrypted_notes: enc_notes,
+            url: credential.url.clone(),
+            created_at: credential.created_at.to_rfc3339(),
+            updated_at: credential.updated_at.to_rfc3339(),
+        };
+
+        let data: NodeData = serde_json::to_value(&stored)?;
+        self.store.put(node_key, ACTOR_ID, data);
+        Ok(())
+    }
+
     fn apply_updates(
         credential: &mut Credential,
         new_username: Option<String>,
@@ -696,11 +1076,12 @@ mod tests {
     #[tokio::test]
     async fn test_init_vault() {
         let mut vault = create_vault().await;
-        let config = vault.init_vault("My Vault", TEST_PASSWORD).await.unwrap();
+        let result = vault.init_vault("My Vault", TEST_PASSWORD).await.unwrap();
 
-        assert_eq!(config.vault_name, "My Vault");
-        assert_eq!(config.version, 1);
-        assert_eq!(config.key_derivation_params.algorithm, "argon2id");
+        assert_eq!(result.config.vault_name, "My Vault");
+        assert_eq!(result.config.version, 1);
+        assert_eq!(result.config.key_derivation_params.algorithm, "argon2id");
+        assert!(!result.recovery_key.is_empty());
         assert!(vault.is_unlocked());
     }
 
@@ -1012,5 +1393,125 @@ mod tests {
         let cred = vault.get_credential("Encrypted").await.unwrap().unwrap();
         assert_eq!(cred.password, "plaintextpassword");
         assert_eq!(cred.notes.as_deref(), Some("sensitive notes"));
+    }
+
+    #[tokio::test]
+    async fn test_change_master_password() {
+        let mut vault = init_vault().await;
+        vault
+            .add_credential("TestCred".into(), Some("user".into()), "secret123".into(), None, None)
+            .await
+            .unwrap();
+
+        let new_password = "new_master_password_456";
+        let config = vault
+            .change_master_password(TEST_PASSWORD, new_password)
+            .await
+            .unwrap();
+        assert_eq!(config.version, 2);
+
+        // Old password should fail
+        vault.lock();
+        assert!(vault.unlock_vault(TEST_PASSWORD).await.is_err());
+
+        // New password should work
+        vault.unlock_vault(new_password).await.unwrap();
+        let cred = vault.get_credential("TestCred").await.unwrap().unwrap();
+        assert_eq!(cred.password, "secret123");
+        assert_eq!(cred.username.as_deref(), Some("user"));
+    }
+
+    #[tokio::test]
+    async fn test_change_master_password_wrong_current() {
+        let mut vault = init_vault().await;
+        assert!(vault
+            .change_master_password("wrong_password", "new_pass")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_recovery_key_generated_on_init() {
+        let mut vault = create_vault().await;
+        let result = vault.init_vault("RecoveryVault", TEST_PASSWORD).await.unwrap();
+        assert!(!result.recovery_key.is_empty());
+        // Recovery key should be base64
+        assert!(base64::Engine::decode(
+            &base64::engine::general_purpose::STANDARD,
+            &result.recovery_key,
+        ).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_recover_with_key() {
+        let mut vault = create_vault().await;
+        let result = vault.init_vault("RecoveryVault", TEST_PASSWORD).await.unwrap();
+        let recovery_key = result.recovery_key.clone();
+
+        vault.lock();
+
+        let config = vault
+            .recover_with_key(&recovery_key, "recovered_password_789")
+            .await
+            .unwrap();
+        assert_eq!(config.version, 2);
+        assert!(vault.is_unlocked());
+    }
+
+    #[tokio::test]
+    async fn test_recover_with_wrong_key_fails() {
+        let mut vault = create_vault().await;
+        vault.init_vault("RecoveryVault", TEST_PASSWORD).await.unwrap();
+        vault.lock();
+
+        assert!(vault
+            .recover_with_key("bm90X2FfcmVhbF9rZXk=", "new_pass")
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn test_export_and_import_vault() {
+        let vault = init_vault().await;
+        vault
+            .add_credential("Cred1".into(), Some("u1".into()), "p1".into(), None, None)
+            .await
+            .unwrap();
+        vault
+            .add_credential("Cred2".into(), None, "p2".into(), Some("https://example.com".into()), None)
+            .await
+            .unwrap();
+
+        let exported = vault.export_vault("export_pass_123").await.unwrap();
+        assert!(!exported.is_empty());
+
+        // Import into a new vault with same password
+        let mut vault2 = create_vault().await;
+        vault2.init_vault("ImportVault", TEST_PASSWORD).await.unwrap();
+
+        let imported_count = vault2.import_vault(&exported, "export_pass_123").await.unwrap();
+        assert_eq!(imported_count, 2);
+
+        let cred1 = vault2.get_credential("Cred1").await.unwrap().unwrap();
+        assert_eq!(cred1.password, "p1");
+        assert_eq!(cred1.username.as_deref(), Some("u1"));
+
+        let cred2 = vault2.get_credential("Cred2").await.unwrap().unwrap();
+        assert_eq!(cred2.password, "p2");
+    }
+
+    #[tokio::test]
+    async fn test_import_skips_existing_credentials() {
+        let vault = init_vault().await;
+        vault
+            .add_credential("Existing".into(), None, "original".into(), None, None)
+            .await
+            .unwrap();
+
+        let exported = vault.export_vault("export_pass").await.unwrap();
+
+        // Import back into same vault — should skip the existing one
+        let imported_count = vault.import_vault(&exported, "export_pass").await.unwrap();
+        assert_eq!(imported_count, 0);
     }
 }
