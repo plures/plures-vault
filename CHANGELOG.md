@@ -1,3 +1,17 @@
+## [0.4.0] — 2026-08-09
+
+- Merge pull request #26 from plures/copilot/complete-p2p-sync-ux-conflict-handling (2668073)
+- fix(sync): ignore stale persisted running flag when starting relay (0263040)
+- fix(gui): cache long-lived SyncManager in AppState for sync IPC commands (5abadb2)
+- fix(sync): keep persisted conflict strategy authoritative on session writes (64143e0)
+- fix(sync): persist conflicts, stats and sync state in the CrdtStore (6e0c027)
+- Potential fix for pull request finding (c68d909)
+- Potential fix for pull request finding (2399cd2)
+- Potential fix for pull request finding (ce86291)
+- fix: address code review - lock ordering, matches assertion (d11bf0f)
+- feat: complete P2P sync UX + conflict handling (298945d)
+- Initial plan (feb156d)
+
 ## [0.3.0] — 2026-08-09
 
 - Merge pull request #25 from plures/copilot/harden-vault-init-flows (e0e61ea)
