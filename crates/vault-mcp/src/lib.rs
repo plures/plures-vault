@@ -560,26 +560,33 @@ impl McpServer {
     }
 
     /// Wall-clock timestamp helper.
-    fn now_iso() -> String {
-        use std::time::SystemTime;
-        match SystemTime::now().duration_since(SystemTime::UNIX_EPOCH) {
-            Ok(d) => {
-                let secs = d.as_secs();
-                let hours = (secs / 3600) % 24;
-                let mins = (secs / 60) % 60;
-                let s = secs % 60;
-                let days = secs / 86400;
-                // Approximate date from epoch days (good enough for audit stamps)
-                let year = 1970 + days / 365;
-                let day_of_year = days % 365;
-                let month = day_of_year / 30 + 1;
-                let day = day_of_year % 30 + 1;
-                format!(
-                    "{year:04}-{month:02}-{day:02}T{hours:02}:{mins:02}:{s:02}Z"
-                )
-            }
-            Err(_) => "1970-01-01T00:00:00Z".to_string(),
-        }
+fn now_iso() -> String {
+        use std::time::{SystemTime, UNIX_EPOCH};
+
+        let secs = match SystemTime::now().duration_since(UNIX_EPOCH) {
+            Ok(d) => d.as_secs() as i64,
+            Err(_) => return "1970-01-01T00:00:00Z".to_string(),
+        };
+
+        let days = secs.div_euclid(86_400);
+        let sod = secs.rem_euclid(86_400);
+        let hours = sod / 3_600;
+        let mins = (sod % 3_600) / 60;
+        let s = sod % 60;
+
+        // Convert days since Unix epoch to Gregorian calendar date.
+        let z = days + 719_468;
+        let era = (if z >= 0 { z } else { z - 146_096 }).div_euclid(146_097);
+        let doe = z - era * 146_097;
+        let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+        let y = yoe + era * 400;
+        let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+        let mp = (5 * doy + 2) / 153;
+        let day = doy - (153 * mp + 2) / 5 + 1;
+        let month = mp + if mp < 10 { 3 } else { -9 };
+        let year = y + if month <= 2 { 1 } else { 0 };
+
+        format!("{year:04}-{month:02}-{day:02}T{hours:02}:{mins:02}:{s:02}Z")
     }
 
     // -- default definitions ------------------------------------------------
