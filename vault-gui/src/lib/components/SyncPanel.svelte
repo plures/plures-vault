@@ -97,7 +97,7 @@
       </label>
       <button
         class="refresh-btn"
-        onclick={refreshStatus}
+        on:click={refreshStatus}
         aria-label="Refresh conflict list"
       >
         ↻ Refresh
