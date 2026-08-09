@@ -254,8 +254,12 @@ impl SyncManager {
     ///
     /// This starts a GUN-protocol relay that other Plures Vault instances
     /// can connect to for CRDT replication.
+    ///
+    /// A persisted `running` flag left behind by a process that exited without
+    /// calling [`SyncManager::stop`] is treated as stale: only a relay owned by
+    /// this instance counts as already running.
     pub async fn start(&mut self, port: u16) -> Result<()> {
-        if self.started {
+        if self.started && self.relay.is_some() {
             return Err(SyncError::AlreadyRunning.into());
         }
 
@@ -986,5 +990,24 @@ mod tests {
             SyncManager::new(store, vault_id).conflict_strategy(),
             ConflictStrategy::Manual
         );
+    }
+
+    #[tokio::test]
+    async fn test_stale_running_flag_does_not_block_start() {
+        let store = test_store();
+        let vault_id = Uuid::new_v4();
+
+        // Simulate a sync process that exited without calling stop().
+        let mut crashed = SyncManager::new(Arc::clone(&store), vault_id);
+        crashed.start(0).await.unwrap();
+        drop(crashed);
+
+        let mut fresh = SyncManager::new(Arc::clone(&store), vault_id);
+        assert!(fresh.is_running());
+        fresh.start(0).await.unwrap();
+        assert!(fresh.is_running());
+
+        // A relay owned by this instance is still reported as already running.
+        assert!(fresh.start(0).await.is_err());
     }
 }
