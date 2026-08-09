@@ -2,7 +2,7 @@ use tauri::{AppHandle, Manager, State};
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
 use vault_core::VaultManager;
-use vault_sync::{ConflictStrategy, ConflictWinner, SyncManager};
+use vault_sync::{ConflictWinner, SyncManager};
 use std::sync::Mutex;
 use serde::{Deserialize, Serialize};
 
