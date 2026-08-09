@@ -3,13 +3,16 @@ use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{TrayIconBuilder, TrayIconEvent, MouseButton, MouseButtonState};
 use vault_core::VaultManager;
 use vault_sync::{ConflictWinner, SyncManager};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use serde::{Deserialize, Serialize};
 
 // Application state
 pub struct AppState {
     vault_database_path: Mutex<Option<String>>,
     vault_unlocked: Mutex<bool>,
+    /// Long-lived sync manager, cached per vault database path so that
+    /// in-memory session state is shared across IPC calls.
+    sync_manager: tokio::sync::Mutex<Option<(String, Arc<SyncManager>)>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -316,11 +319,9 @@ pub struct ConflictData {
     pub strategy: Option<String>,
 }
 
-#[tauri::command]
-async fn get_sync_status(
-    _app: AppHandle,
-    state: State<'_, AppState>,
-) -> Result<SyncStatusData, String> {
+/// Get the shared, long-lived `SyncManager` for the currently open vault,
+/// creating and caching it on first use.
+async fn sync_manager(state: &State<'_, AppState>) -> Result<Arc<SyncManager>, String> {
     let database_path = {
         let path_guard = state.vault_database_path.lock().unwrap();
         path_guard.as_ref()
@@ -328,13 +329,32 @@ async fn get_sync_status(
             .clone()
     };
 
+    let mut cache = state.sync_manager.lock().await;
+
+    if let Some((cached_path, manager)) = cache.as_ref() {
+        if cached_path == &database_path {
+            return Ok(Arc::clone(manager));
+        }
+    }
+
     let vault_manager = VaultManager::new(&database_path).await
         .map_err(|e| format!("Failed to create vault manager: {}", e))?;
 
     let config = vault_manager.get_vault_config().await
         .map_err(|e| e.to_string())?;
 
-    let sync_manager = SyncManager::new(vault_manager.store(), config.vault_id);
+    let manager = Arc::new(SyncManager::new(vault_manager.store(), config.vault_id));
+    *cache = Some((database_path, Arc::clone(&manager)));
+
+    Ok(manager)
+}
+
+#[tauri::command]
+async fn get_sync_status(
+    _app: AppHandle,
+    state: State<'_, AppState>,
+) -> Result<SyncStatusData, String> {
+    let sync_manager = sync_manager(&state).await?;
     let stats = sync_manager.stats().await;
 
     Ok(SyncStatusData {
@@ -356,20 +376,7 @@ async fn list_sync_conflicts(
     state: State<'_, AppState>,
     pending_only: bool,
 ) -> Result<Vec<ConflictData>, String> {
-    let database_path = {
-        let path_guard = state.vault_database_path.lock().unwrap();
-        path_guard.as_ref()
-            .ok_or("Vault not initialized")?
-            .clone()
-    };
-
-    let vault_manager = VaultManager::new(&database_path).await
-        .map_err(|e| format!("Failed to create vault manager: {}", e))?;
-
-    let config = vault_manager.get_vault_config().await
-        .map_err(|e| e.to_string())?;
-
-    let sync_manager = SyncManager::new(vault_manager.store(), config.vault_id);
+    let sync_manager = sync_manager(&state).await?;
     let conflicts = sync_manager.list_conflicts(pending_only).await;
 
     Ok(conflicts.into_iter().map(|c| ConflictData {
@@ -393,20 +400,7 @@ async fn resolve_sync_conflict(
     conflict_id: String,
     winner: String,
 ) -> Result<(), String> {
-    let database_path = {
-        let path_guard = state.vault_database_path.lock().unwrap();
-        path_guard.as_ref()
-            .ok_or("Vault not initialized")?
-            .clone()
-    };
-
-    let vault_manager = VaultManager::new(&database_path).await
-        .map_err(|e| format!("Failed to create vault manager: {}", e))?;
-
-    let config = vault_manager.get_vault_config().await
-        .map_err(|e| e.to_string())?;
-
-    let sync_manager = SyncManager::new(vault_manager.store(), config.vault_id);
+    let sync_manager = sync_manager(&state).await?;
 
     let conflict_uuid = uuid::Uuid::parse_str(&conflict_id)
         .map_err(|e| format!("Invalid conflict ID: {}", e))?;
@@ -440,6 +434,7 @@ pub fn run() {
     let app_state = AppState {
         vault_database_path: Mutex::new(None),
         vault_unlocked: Mutex::new(false),
+        sync_manager: tokio::sync::Mutex::new(None),
     };
 
     tauri::Builder::default()
