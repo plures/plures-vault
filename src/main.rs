@@ -484,6 +484,11 @@ async fn main() -> Result<()> {
             match vault.export_vault(&export_pass).await {
                 Ok(data) => {
                     std::fs::write(&output, &data)?;
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o600))?;
+                    }
                     println!("✅ Vault exported to {}", output);
                 }
                 Err(e) => {
