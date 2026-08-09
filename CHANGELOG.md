@@ -1,3 +1,17 @@
+## [0.3.0] — 2026-08-09
+
+- Merge pull request #25 from plures/copilot/harden-vault-init-flows (e0e61ea)
+- Potential fix for pull request finding (31cdc16)
+- Potential fix for pull request finding (88354fa)
+- Potential fix for pull request finding (697d05d)
+- Potential fix for pull request finding (6c0e1e5)
+- fix: address code review feedback for recovery flows (78e156d)
+- feat: harden vault init/recovery flows (seed backup, rotation, export) (a11851c)
+- Initial plan (421e946)
+- Merge pull request #24 from plures/chore/dependabot-auto-merge-workflow-call (35d1fac)
+- Potential fix for pull request finding (4000c7e)
+- chore: delegate dependabot-auto-merge.yml to plures/.github reusable template (5a1007f)
+
 ## [0.2.0] — 2026-07-24
 
 - Merge pull request #23 from plures/release-trigger-autobump (3a17e5d)
