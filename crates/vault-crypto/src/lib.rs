@@ -281,7 +281,7 @@ mod deterministic_vectors {
     // -- AES-256-GCM deterministic encryption --------------------------------
 
     fn fixed_nonce() -> [u8; 12] {
-        // 12-byte all-zero nonce — acceptable only in tests with unique keys.
+        // 12-byte all-zero nonce — for deterministic test vectors only (never reuse a nonce with the same key in production).
         [0u8; 12]
     }
 
