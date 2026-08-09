@@ -120,14 +120,15 @@ impl VaultCrypto {
         plaintext: &str,
         nonce_bytes: &[u8; 12],
     ) -> Result<EncryptedData, CryptoError> {
-        // Ensure we have exactly 32 bytes for AES-256
-        let mut key_bytes = [0u8; 32];
-        let len = std::cmp::min(master_key.key.len(), 32);
-        key_bytes[..len].copy_from_slice(&master_key.key[..len]);
-        
+        // Require exactly 32 bytes for AES-256
+        let key_bytes: [u8; 32] = master_key
+            .key
+            .as_slice()
+            .try_into()
+            .map_err(|_| CryptoError::InvalidKeyLength)?;
+
         let key = Key::<Aes256Gcm>::from_slice(&key_bytes);
         let cipher = Aes256Gcm::new(key);
-        
         let nonce = Nonce::from_slice(nonce_bytes);
         let ciphertext = cipher
             .encrypt(nonce, plaintext.as_bytes())
