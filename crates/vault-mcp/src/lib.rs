@@ -101,8 +101,9 @@ impl AuditLog {
         Self::default()
     }
 
-    pub fn record(&self, entry: AuditEntry) {
-        self.entries.lock().expect("audit lock poisoned").push(entry);
+pub fn record(&self, entry: AuditEntry) {
+        let mut guard = self.entries.lock().unwrap_or_else(|e| e.into_inner());
+        guard.push(entry);
     }
 
     pub fn entries(&self) -> Vec<AuditEntry> {
