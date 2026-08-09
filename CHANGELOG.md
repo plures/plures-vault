@@ -1,3 +1,12 @@
+## [0.6.0] — 2026-08-09
+
+- Merge pull request #28 from plures/copilot/add-deterministic-test-vectors (4d7ded1)
+- Potential fix for pull request finding (18490ad)
+- Potential fix for pull request finding (d5a3ae8)
+- feat: add deterministic test vectors and cryptographic validation suite (7f9f4ec)
+- feat: add deterministic test vectors and cryptographic validation suite (c2312c3)
+- Initial plan (1023f90)
+
 ## [0.5.0] — 2026-08-09
 
 - Merge pull request #27 from plures/copilot/expand-mcp-surface-least-privilege-scopes (88654e4)
