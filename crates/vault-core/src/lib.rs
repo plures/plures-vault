@@ -627,7 +627,10 @@ impl VaultManager {
             .collect();
 
         for key in &cred_keys {
-            let record = self.store.get(key).unwrap();
+            let record = self
+                .store
+                .get(key)
+                .ok_or_else(|| VaultError::StorageError(format!("Missing credential record during rotation: {}", key)))?;
             let cred = self.node_to_credential(&record.data, &old_key)?;
             self.store_credential_with_key(key, &cred, &new_key)?;
         }
