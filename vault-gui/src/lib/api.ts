@@ -15,6 +15,31 @@ export interface VaultStatus {
   vault_name?: string;
 }
 
+export interface SyncStatusData {
+  running: boolean;
+  peer_id: string;
+  strategy: string;
+  peers_connected: number;
+  events_sent: number;
+  events_received: number;
+  conflicts_detected: number;
+  conflicts_resolved: number;
+  last_sync: string | null;
+}
+
+export interface ConflictData {
+  id: string;
+  node_id: string;
+  local_peer_id: string;
+  local_updated_at: string;
+  remote_peer_id: string;
+  remote_updated_at: string;
+  detected_at: string;
+  resolved: boolean;
+  winner: string | null;
+  strategy: string | null;
+}
+
 export class VaultAPI {
   private databasePath: string;
 
@@ -74,6 +99,18 @@ export class VaultAPI {
     return await invoke('delete_credential', {
       credentialId
     });
+  }
+
+  async getSyncStatus(): Promise<SyncStatusData> {
+    return await invoke('get_sync_status');
+  }
+
+  async listSyncConflicts(pendingOnly: boolean = false): Promise<ConflictData[]> {
+    return await invoke('list_sync_conflicts', { pendingOnly });
+  }
+
+  async resolveSyncConflict(conflictId: string, winner: 'local' | 'remote'): Promise<void> {
+    return await invoke('resolve_sync_conflict', { conflictId, winner });
   }
 }
 

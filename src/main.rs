@@ -1,8 +1,8 @@
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use vault_core::VaultManager;
 use vault_graph::{SecretGraph, SecretNodeKind, RelationshipType};
 use vault_mcp::McpServer;
-use vault_sync::SyncManager;
+use vault_sync::{ConflictStrategy, ConflictWinner, SyncManager};
 use anyhow::Result;
 use std::io::{self, Write};
 use uuid::Uuid;
@@ -77,6 +77,29 @@ enum Commands {
     },
     /// List connected peers
     ListPeers,
+    /// Show sync status with conflict summary
+    SyncStatus,
+    /// List detected sync conflicts
+    ListConflicts {
+        /// Show only unresolved conflicts
+        #[arg(long)]
+        pending: bool,
+    },
+    /// Resolve a sync conflict
+    ResolveConflict {
+        /// Conflict ID (UUID)
+        #[arg(long)]
+        conflict: String,
+        /// Winner: local or remote
+        #[arg(long, value_enum)]
+        winner: CliConflictWinner,
+    },
+    /// Set the default conflict resolution strategy
+    SetConflictStrategy {
+        /// Strategy to use
+        #[arg(long, value_enum)]
+        strategy: CliConflictStrategy,
+    },
     /// Lock the vault
     Lock,
     /// Sync with other devices (placeholder for GUI)
@@ -149,6 +172,42 @@ enum GraphCommands {
     },
     /// Show the full secret graph
     Show,
+}
+
+/// CLI-facing conflict winner.
+#[derive(Clone, ValueEnum)]
+enum CliConflictWinner {
+    Local,
+    Remote,
+}
+
+/// CLI-facing conflict strategy.
+#[derive(Clone, ValueEnum)]
+enum CliConflictStrategy {
+    RemoteWins,
+    LocalWins,
+    LastWriteWins,
+    Manual,
+}
+
+impl From<CliConflictStrategy> for ConflictStrategy {
+    fn from(s: CliConflictStrategy) -> Self {
+        match s {
+            CliConflictStrategy::RemoteWins => ConflictStrategy::RemoteWins,
+            CliConflictStrategy::LocalWins => ConflictStrategy::LocalWins,
+            CliConflictStrategy::LastWriteWins => ConflictStrategy::LastWriteWins,
+            CliConflictStrategy::Manual => ConflictStrategy::Manual,
+        }
+    }
+}
+
+impl From<CliConflictWinner> for ConflictWinner {
+    fn from(w: CliConflictWinner) -> Self {
+        match w {
+            CliConflictWinner::Local => ConflictWinner::Local,
+            CliConflictWinner::Remote => ConflictWinner::Remote,
+        }
+    }
 }
 
 fn prompt_password(prompt: &str) -> Result<String> {
@@ -411,6 +470,110 @@ async fn main() -> Result<()> {
             if let Some(last) = stats.last_sync {
                 println!("   Last sync: {}", last.format("%Y-%m-%d %H:%M:%S UTC"));
             }
+        }
+
+        Commands::SyncStatus => {
+            if !vault.is_unlocked() {
+                let password = prompt_password("Enter master password to unlock vault: ")?;
+                vault.unlock_vault(&password).await?;
+            }
+
+            let config = vault.get_vault_config().await?;
+            let sync_manager = SyncManager::new(vault.store(), config.vault_id);
+            let stats = sync_manager.stats().await;
+
+            println!("📊 Sync Status:");
+            println!("   Running:            {}", sync_manager.is_running());
+            println!("   Peer ID:            {}", sync_manager.local_peer_id());
+            println!("   Strategy:           {:?}", sync_manager.conflict_strategy());
+            println!("   Peers connected:    {}", stats.peers_connected);
+            println!("   Events sent:        {}", stats.events_sent);
+            println!("   Events received:    {}", stats.events_received);
+            println!("   Conflicts detected: {}", stats.conflicts_detected);
+            println!("   Conflicts resolved: {}", stats.conflicts_resolved);
+            if let Some(last) = stats.last_sync {
+                println!("   Last sync:          {}", last.format("%Y-%m-%d %H:%M:%S UTC"));
+            }
+
+            let pending = sync_manager.list_conflicts(true).await;
+            if !pending.is_empty() {
+                println!("\n⚠️  {} unresolved conflict(s):", pending.len());
+                for c in &pending {
+                    println!("   • {} — node: {} (detected {})",
+                        c.id, c.node_id, c.detected_at.format("%Y-%m-%d %H:%M:%S UTC"));
+                }
+                println!("   Use 'list-conflicts --pending' for details or 'resolve-conflict' to resolve.");
+            }
+        }
+
+        Commands::ListConflicts { pending } => {
+            if !vault.is_unlocked() {
+                let password = prompt_password("Enter master password to unlock vault: ")?;
+                vault.unlock_vault(&password).await?;
+            }
+
+            let config = vault.get_vault_config().await?;
+            let sync_manager = SyncManager::new(vault.store(), config.vault_id);
+            let conflicts = sync_manager.list_conflicts(pending).await;
+
+            if conflicts.is_empty() {
+                println!("✅ No {}conflicts", if pending { "pending " } else { "" });
+            } else {
+                println!("🔀 {} conflict(s):", conflicts.len());
+                for c in &conflicts {
+                    let status = if c.resolved { "✅ resolved" } else { "⚠️  pending" };
+                    println!("\n   [{status}] Conflict {}", c.id);
+                    println!("   Node:     {}", c.node_id);
+                    println!("   Detected: {}", c.detected_at.format("%Y-%m-%d %H:%M:%S UTC"));
+                    println!("   Local:    peer={}, updated={}",
+                        c.local_version.peer_id,
+                        c.local_version.updated_at.format("%Y-%m-%d %H:%M:%S UTC"));
+                    println!("   Remote:   peer={}, updated={}",
+                        c.remote_version.peer_id,
+                        c.remote_version.updated_at.format("%Y-%m-%d %H:%M:%S UTC"));
+                    if let Some(res) = &c.resolution {
+                        println!("   Winner:   {:?} ({:?})", res.winner, res.strategy);
+                    }
+                }
+            }
+        }
+
+        Commands::ResolveConflict { conflict, winner } => {
+            if !vault.is_unlocked() {
+                let password = prompt_password("Enter master password to unlock vault: ")?;
+                vault.unlock_vault(&password).await?;
+            }
+
+            let conflict_id = Uuid::parse_str(&conflict)
+                .map_err(|e| anyhow::anyhow!("Invalid conflict UUID: {}", e))?;
+
+            let config = vault.get_vault_config().await?;
+            let sync_manager = SyncManager::new(vault.store(), config.vault_id);
+
+            match sync_manager.resolve_conflict(conflict_id, winner.into()).await {
+                Ok(record) => {
+                    let res = record.resolution.unwrap();
+                    println!("✅ Conflict {} resolved: {:?} wins", conflict_id, res.winner);
+                }
+                Err(e) => {
+                    println!("❌ Failed to resolve conflict: {}", e);
+                }
+            }
+        }
+
+        Commands::SetConflictStrategy { strategy } => {
+            if !vault.is_unlocked() {
+                let password = prompt_password("Enter master password to unlock vault: ")?;
+                vault.unlock_vault(&password).await?;
+            }
+
+            let strat: ConflictStrategy = strategy.into();
+            let config = vault.get_vault_config().await?;
+            let mut sync_manager = SyncManager::new(vault.store(), config.vault_id);
+            sync_manager.set_conflict_strategy(strat);
+
+            println!("✅ Conflict resolution strategy set to: {:?}", strat);
+            println!("💡 Saved to the vault — it applies to future sync sessions.");
         }
         
         Commands::Lock => {

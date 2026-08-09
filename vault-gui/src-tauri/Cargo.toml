@@ -27,6 +27,7 @@ tauri-plugin-positioner = "2.0"
 # Add our vault core dependencies
 vault-core = { path = "../../crates/vault-core" }
 vault-crypto = { path = "../../crates/vault-crypto" }
+vault-sync = { path = "../../crates/vault-sync" }
 
 [features]
 # this feature is used for production builds or when `devPath` points to the filesystem
