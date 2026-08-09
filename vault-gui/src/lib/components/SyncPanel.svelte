@@ -91,7 +91,6 @@
         <input
           type="checkbox"
           bind:checked={showPendingOnly}
-          onchange={refreshStatus}
           aria-label="Show pending conflicts only"
         />
         Pending only
