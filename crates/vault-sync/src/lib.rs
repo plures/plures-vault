@@ -24,12 +24,26 @@ use anyhow::Result;
 use chrono::{DateTime, Utc};
 use pluresdb::{CrdtStore, GunRelayServer, SyncBroadcaster, SyncEvent};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::sync::Arc;
 use thiserror::Error;
 use tokio::sync::broadcast;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 use uuid::Uuid;
+
+// ── Persistence keys ─────────────────────────────────────────────────────────
+
+/// Actor id used when writing sync bookkeeping nodes.
+const ACTOR_ID: &str = "vault-sync";
+/// Node holding the durable sync session state (peer id, strategy, running).
+const SYNC_STATE_KEY: &str = "vault-sync:state";
+/// Node holding the durable sync statistics.
+const SYNC_STATS_KEY: &str = "vault-sync:stats";
+/// Prefix for durable conflict records.
+const CONFLICT_PREFIX: &str = "vault-sync:conflict:";
+
+fn conflict_key(conflict_id: &Uuid) -> String {
+    format!("{}{}", CONFLICT_PREFIX, conflict_id)
+}
 
 // ── Error types ──────────────────────────────────────────────────────────────
 
@@ -143,6 +157,39 @@ pub enum VaultSyncEvent {
 
 // ── Sync Manager ─────────────────────────────────────────────────────────────
 
+/// Durable sync session state, persisted in the vault's `CrdtStore` so that
+/// separate processes (CLI invocations, the GUI) observe the same peer id,
+/// conflict strategy and running flag.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedSyncState {
+    local_peer_id: Uuid,
+    strategy: ConflictStrategy,
+    running: bool,
+    port: Option<u16>,
+    started_at: Option<DateTime<Utc>>,
+}
+
+impl PersistedSyncState {
+    fn new() -> Self {
+        Self {
+            local_peer_id: Uuid::new_v4(),
+            strategy: ConflictStrategy::default(),
+            running: false,
+            port: None,
+            started_at: None,
+        }
+    }
+}
+
+/// Manages P2P sync for a vault.
+///
+/// All cross-process state — the local peer id, the conflict strategy, sync
+/// statistics and conflict records — is persisted in the vault's `CrdtStore`,
+/// so a `SyncManager` constructed in a new process reports the same data and
+/// can resolve conflicts recorded by another process.
+///
+/// The `running` flag is cleared by [`SyncManager::stop`]; if a sync process
+/// terminates abnormally the flag stays set until the next `start`/`stop`.
 pub struct SyncManager {
     store: Arc<CrdtStore>,
     vault_id: Uuid,
@@ -150,33 +197,52 @@ pub struct SyncManager {
     relay: Option<GunRelayServer>,
     broadcaster: Option<SyncBroadcaster>,
     event_tx: broadcast::Sender<VaultSyncEvent>,
-    stats: Arc<tokio::sync::Mutex<SyncStats>>,
-    conflicts: Arc<tokio::sync::Mutex<HashMap<Uuid, ConflictRecord>>>,
+    /// Serializes read-modify-write cycles on the persisted statistics node.
+    stats_lock: Arc<tokio::sync::Mutex<()>>,
+    /// Serializes read-modify-write cycles on persisted conflict records.
+    conflicts_lock: Arc<tokio::sync::Mutex<()>>,
     conflict_strategy: ConflictStrategy,
     started: bool,
 }
 
 impl SyncManager {
     /// Create a new sync manager backed by a PluresDB CrdtStore.
+    ///
+    /// Durable state (peer id, strategy, running flag) is loaded from the
+    /// store, and initialized on first use.
     pub fn new(store: Arc<CrdtStore>, vault_id: Uuid) -> Self {
         let (event_tx, _) = broadcast::channel(256);
+
+        let state = match Self::load_state(&store) {
+            Some(state) => state,
+            None => {
+                let state = PersistedSyncState::new();
+                Self::persist_state(&store, &state);
+                state
+            }
+        };
+
         Self {
             store,
             vault_id,
-            local_peer_id: Uuid::new_v4(),
+            local_peer_id: state.local_peer_id,
             relay: None,
             broadcaster: None,
             event_tx,
-            stats: Arc::new(tokio::sync::Mutex::new(SyncStats::default())),
-            conflicts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
-            conflict_strategy: ConflictStrategy::default(),
-            started: false,
+            stats_lock: Arc::new(tokio::sync::Mutex::new(())),
+            conflicts_lock: Arc::new(tokio::sync::Mutex::new(())),
+            conflict_strategy: state.strategy,
+            started: state.running,
         }
     }
 
-    /// Set the conflict resolution strategy.
+    /// Set the conflict resolution strategy and persist it for future sessions.
     pub fn set_conflict_strategy(&mut self, strategy: ConflictStrategy) {
         self.conflict_strategy = strategy;
+        let mut state = Self::load_state(&self.store).unwrap_or_else(PersistedSyncState::new);
+        state.local_peer_id = self.local_peer_id;
+        state.strategy = strategy;
+        Self::persist_state(&self.store, &state);
     }
 
     /// Get the current conflict resolution strategy.
@@ -202,7 +268,8 @@ impl SyncManager {
 
         // Subscribe to sync events from PluresDB
         let mut rx = broadcaster.subscribe();
-        let stats = Arc::clone(&self.stats);
+        let store = Arc::clone(&self.store);
+        let stats_lock = Arc::clone(&self.stats_lock);
         let event_tx = self.event_tx.clone();
 
         tokio::spawn(async move {
@@ -210,9 +277,11 @@ impl SyncManager {
                 match &event {
                     SyncEvent::NodeUpsert { id } => {
                         debug!("CRDT sync: node {} upserted", id);
-                        let mut s = stats.lock().await;
-                        s.events_received += 1;
-                        s.last_sync = Some(Utc::now());
+                        Self::mutate_stats_with(&store, &stats_lock, |s| {
+                            s.events_received += 1;
+                            s.last_sync = Some(Utc::now());
+                        })
+                        .await;
 
                         let _ = event_tx.send(VaultSyncEvent::CredentialSynced {
                             node_id: id.clone(),
@@ -237,6 +306,7 @@ impl SyncManager {
         self.relay = Some(relay);
         self.broadcaster = Some(broadcaster);
         self.started = true;
+        self.persist_session(true, Some(port));
 
         info!("P2P sync relay started on {} for vault {}", addr, self.vault_id);
         Ok(())
@@ -261,8 +331,7 @@ impl SyncManager {
             sync_count: 0,
         };
 
-        let mut stats = self.stats.lock().await;
-        stats.peers_connected += 1;
+        self.mutate_stats(|s| s.peers_connected += 1).await;
 
         let _ = self.event_tx.send(VaultSyncEvent::PeerConnected {
             peer_id: peer.id.to_string(),
@@ -279,6 +348,9 @@ impl SyncManager {
     /// If the current strategy is not `Manual`, the conflict is automatically
     /// resolved and applied to the store. Otherwise it stays pending until the
     /// user calls [`resolve_conflict`].
+    ///
+    /// The record is persisted in the store so other processes can list and
+    /// resolve it.
     pub async fn record_conflict(
         &self,
         node_id: String,
@@ -308,8 +380,10 @@ impl SyncManager {
             resolution: None,
         };
 
-        let mut stats = self.stats.lock().await;
-        stats.conflicts_detected += 1;
+        // Lock ordering is always conflicts → stats.
+        let _guard = self.conflicts_lock.lock().await;
+
+        self.mutate_stats(|s| s.conflicts_detected += 1).await;
 
         let _ = self.event_tx.send(VaultSyncEvent::ConflictDetected {
             conflict_id,
@@ -333,10 +407,11 @@ impl SyncManager {
                 ConflictStrategy::Manual => unreachable!(),
             };
 
-            self.apply_resolution(&mut record, winner, &mut stats)?;
+            self.apply_resolution(&mut record, winner)?;
+            self.mutate_stats(|s| s.conflicts_resolved += 1).await;
         }
 
-        self.conflicts.lock().await.insert(conflict_id, record.clone());
+        self.persist_conflict(&record);
         Ok(record)
     }
 
@@ -346,35 +421,43 @@ impl SyncManager {
         conflict_id: Uuid,
         winner: ConflictWinner,
     ) -> Result<ConflictRecord> {
-        // Acquire locks in the same order as record_conflict: stats → conflicts
-        let mut stats = self.stats.lock().await;
-        let mut conflicts = self.conflicts.lock().await;
-        let record = conflicts
-            .get_mut(&conflict_id)
+        // Lock ordering is always conflicts → stats.
+        let _guard = self.conflicts_lock.lock().await;
+
+        let mut record = Self::load_conflict(&self.store, &conflict_id)
             .ok_or_else(|| SyncError::ConflictNotFound(conflict_id.to_string()))?;
 
         if record.resolved {
-            return Ok(record.clone());
+            return Ok(record);
         }
 
-        self.apply_resolution(record, winner, &mut stats)?;
+        self.apply_resolution(&mut record, winner)?;
+        self.mutate_stats(|s| s.conflicts_resolved += 1).await;
+        self.persist_conflict(&record);
 
-        Ok(record.clone())
+        Ok(record)
     }
 
     /// List all conflicts, optionally filtering to only unresolved ones.
     pub async fn list_conflicts(&self, pending_only: bool) -> Vec<ConflictRecord> {
-        let conflicts = self.conflicts.lock().await;
-        conflicts
-            .values()
+        self.store
+            .list()
+            .into_iter()
+            .filter(|r| r.id.starts_with(CONFLICT_PREFIX))
+            .filter_map(|r| match serde_json::from_value::<ConflictRecord>(r.data) {
+                Ok(record) => Some(record),
+                Err(e) => {
+                    warn!("Skipping malformed conflict record {}: {}", r.id, e);
+                    None
+                }
+            })
             .filter(|c| !pending_only || !c.resolved)
-            .cloned()
             .collect()
     }
 
     /// Get a specific conflict by ID.
     pub async fn get_conflict(&self, conflict_id: Uuid) -> Option<ConflictRecord> {
-        self.conflicts.lock().await.get(&conflict_id).cloned()
+        Self::load_conflict(&self.store, &conflict_id)
     }
 
     /// Subscribe to sync events.
@@ -384,7 +467,7 @@ impl SyncManager {
 
     /// Get current sync statistics.
     pub async fn stats(&self) -> SyncStats {
-        self.stats.lock().await.clone()
+        Self::load_stats(&self.store)
     }
 
     /// Stop the sync relay.
@@ -397,6 +480,7 @@ impl SyncManager {
         self.relay = None;
         self.broadcaster = None;
         self.started = false;
+        self.persist_session(false, None);
         Ok(())
     }
 
@@ -421,7 +505,6 @@ impl SyncManager {
         &self,
         record: &mut ConflictRecord,
         winner: ConflictWinner,
-        stats: &mut SyncStats,
     ) -> Result<()> {
         let winning_data = match winner {
             ConflictWinner::Local => &record.local_version.data,
@@ -439,8 +522,6 @@ impl SyncManager {
             resolved_at: Utc::now(),
         });
 
-        stats.conflicts_resolved += 1;
-
         let _ = self.event_tx.send(VaultSyncEvent::ConflictResolved {
             conflict_id: record.id,
             node_id: record.node_id.clone(),
@@ -452,6 +533,83 @@ impl SyncManager {
             record.id, winner, record.node_id
         );
         Ok(())
+    }
+
+    fn persist_conflict(&self, record: &ConflictRecord) {
+        match serde_json::to_value(record) {
+            Ok(data) => self.store.put(conflict_key(&record.id), ACTOR_ID, data),
+            Err(e) => warn!("Failed to persist conflict {}: {}", record.id, e),
+        }
+    }
+
+    fn load_conflict(store: &CrdtStore, conflict_id: &Uuid) -> Option<ConflictRecord> {
+        let record = store.get(&conflict_key(conflict_id))?;
+        match serde_json::from_value(record.data) {
+            Ok(conflict) => Some(conflict),
+            Err(e) => {
+                warn!("Failed to read conflict {}: {}", conflict_id, e);
+                None
+            }
+        }
+    }
+
+    fn persist_session(&self, running: bool, port: Option<u16>) {
+        let mut state = Self::load_state(&self.store).unwrap_or_else(PersistedSyncState::new);
+        state.local_peer_id = self.local_peer_id;
+        state.strategy = self.conflict_strategy;
+        state.running = running;
+        state.port = port;
+        state.started_at = if running { Some(Utc::now()) } else { None };
+        Self::persist_state(&self.store, &state);
+    }
+
+    fn load_state(store: &CrdtStore) -> Option<PersistedSyncState> {
+        let record = store.get(SYNC_STATE_KEY)?;
+        match serde_json::from_value(record.data) {
+            Ok(state) => Some(state),
+            Err(e) => {
+                warn!("Failed to read persisted sync state: {}", e);
+                None
+            }
+        }
+    }
+
+    fn persist_state(store: &CrdtStore, state: &PersistedSyncState) {
+        match serde_json::to_value(state) {
+            Ok(data) => store.put(SYNC_STATE_KEY, ACTOR_ID, data),
+            Err(e) => warn!("Failed to persist sync state: {}", e),
+        }
+    }
+
+    fn load_stats(store: &CrdtStore) -> SyncStats {
+        store
+            .get(SYNC_STATS_KEY)
+            .and_then(|r| match serde_json::from_value(r.data) {
+                Ok(stats) => Some(stats),
+                Err(e) => {
+                    warn!("Failed to read persisted sync stats: {}", e);
+                    None
+                }
+            })
+            .unwrap_or_default()
+    }
+
+    async fn mutate_stats(&self, f: impl FnOnce(&mut SyncStats)) {
+        Self::mutate_stats_with(&self.store, &self.stats_lock, f).await;
+    }
+
+    async fn mutate_stats_with(
+        store: &CrdtStore,
+        lock: &tokio::sync::Mutex<()>,
+        f: impl FnOnce(&mut SyncStats),
+    ) {
+        let _guard = lock.lock().await;
+        let mut stats = Self::load_stats(store);
+        f(&mut stats);
+        match serde_json::to_value(&stats) {
+            Ok(data) => store.put(SYNC_STATS_KEY, ACTOR_ID, data),
+            Err(e) => warn!("Failed to persist sync stats: {}", e),
+        }
     }
 }
 
@@ -739,5 +897,70 @@ mod tests {
         // Should have received a ConflictDetected event
         let event = rx.try_recv().unwrap();
         assert!(matches!(event, VaultSyncEvent::ConflictDetected { .. }));
+    }
+
+    #[tokio::test]
+    async fn test_peer_id_and_strategy_persist_across_instances() {
+        let store = test_store();
+        let vault_id = Uuid::new_v4();
+
+        let peer_id = {
+            let mut sync = SyncManager::new(Arc::clone(&store), vault_id);
+            sync.set_conflict_strategy(ConflictStrategy::Manual);
+            sync.local_peer_id()
+        };
+
+        let reloaded = SyncManager::new(store, vault_id);
+        assert_eq!(reloaded.local_peer_id(), peer_id);
+        assert_eq!(reloaded.conflict_strategy(), ConflictStrategy::Manual);
+    }
+
+    #[tokio::test]
+    async fn test_conflicts_and_stats_visible_to_new_instance() {
+        let store = test_store();
+        let vault_id = Uuid::new_v4();
+
+        let conflict_id = {
+            let mut sync = SyncManager::new(Arc::clone(&store), vault_id);
+            sync.set_conflict_strategy(ConflictStrategy::Manual);
+            sync.record_conflict(
+                "cred:cross".to_string(),
+                json!({"title": "local"}),
+                Utc::now(),
+                "peer-x".to_string(),
+                json!({"title": "remote"}),
+                Utc::now(),
+            )
+            .await
+            .unwrap()
+            .id
+        };
+
+        // A fresh manager (as created by a separate CLI/GUI invocation) sees
+        // the pending conflict and the recorded stats, and can resolve it.
+        let reloaded = SyncManager::new(store, vault_id);
+        assert_eq!(reloaded.list_conflicts(true).await.len(), 1);
+        assert_eq!(reloaded.stats().await.conflicts_detected, 1);
+
+        let resolved = reloaded
+            .resolve_conflict(conflict_id, ConflictWinner::Remote)
+            .await
+            .unwrap();
+        assert!(resolved.resolved);
+        assert_eq!(reloaded.list_conflicts(true).await.len(), 0);
+        assert_eq!(reloaded.stats().await.conflicts_resolved, 1);
+    }
+
+    #[tokio::test]
+    async fn test_running_flag_persists_and_clears() {
+        let store = test_store();
+        let vault_id = Uuid::new_v4();
+
+        let mut sync = SyncManager::new(Arc::clone(&store), vault_id);
+        sync.start(0).await.unwrap();
+        assert!(SyncManager::new(Arc::clone(&store), vault_id).is_running());
+
+        sync.stop().await.unwrap();
+        assert!(!SyncManager::new(store, vault_id).is_running());
     }
 }

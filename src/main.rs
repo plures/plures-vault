@@ -542,9 +542,18 @@ async fn main() -> Result<()> {
         }
 
         Commands::SetConflictStrategy { strategy } => {
+            if !vault.is_unlocked() {
+                let password = prompt_password("Enter master password to unlock vault: ")?;
+                vault.unlock_vault(&password).await?;
+            }
+
             let strat: ConflictStrategy = strategy.into();
+            let config = vault.get_vault_config().await?;
+            let mut sync_manager = SyncManager::new(vault.store(), config.vault_id);
+            sync_manager.set_conflict_strategy(strat);
+
             println!("✅ Conflict resolution strategy set to: {:?}", strat);
-            println!("💡 This will apply to the next sync session started with 'start-sync'.");
+            println!("💡 Saved to the vault — it applies to future sync sessions.");
         }
         
         Commands::Lock => {
