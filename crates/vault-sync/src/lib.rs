@@ -554,9 +554,13 @@ impl SyncManager {
     }
 
     fn persist_session(&self, running: bool, port: Option<u16>) {
-        let mut state = Self::load_state(&self.store).unwrap_or_else(PersistedSyncState::new);
+        // The persisted strategy is authoritative: `set-conflict-strategy` may
+        // have been run from another process while this session was live.
+        let mut state = Self::load_state(&self.store).unwrap_or_else(|| PersistedSyncState {
+            strategy: self.conflict_strategy,
+            ..PersistedSyncState::new()
+        });
         state.local_peer_id = self.local_peer_id;
-        state.strategy = self.conflict_strategy;
         state.running = running;
         state.port = port;
         state.started_at = if running { Some(Utc::now()) } else { None };
@@ -962,5 +966,25 @@ mod tests {
 
         sync.stop().await.unwrap();
         assert!(!SyncManager::new(store, vault_id).is_running());
+    }
+
+    #[tokio::test]
+    async fn test_strategy_set_during_session_is_not_clobbered() {
+        let store = test_store();
+        let vault_id = Uuid::new_v4();
+
+        let mut session = SyncManager::new(Arc::clone(&store), vault_id);
+        session.start(0).await.unwrap();
+
+        // Another process runs `set-conflict-strategy` while the session is live.
+        let mut cli = SyncManager::new(Arc::clone(&store), vault_id);
+        cli.set_conflict_strategy(ConflictStrategy::Manual);
+
+        session.stop().await.unwrap();
+
+        assert_eq!(
+            SyncManager::new(store, vault_id).conflict_strategy(),
+            ConflictStrategy::Manual
+        );
     }
 }
