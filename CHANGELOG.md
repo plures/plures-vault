@@ -1,3 +1,11 @@
+## [0.5.0] — 2026-08-09
+
+- Merge pull request #27 from plures/copilot/expand-mcp-surface-least-privilege-scopes (88654e4)
+- Potential fix for pull request finding (8a35369)
+- Potential fix for pull request finding (37ae2f2)
+- fix(vault-mcp): use real wall-clock timestamps in audit log, clarify admin scope on audit resource (e6eec9c)
+- feat(vault-mcp): add least-privilege scopes and audit logs to MCP surface (97d1b0a)
+
 ## [0.4.0] — 2026-08-09
 
 - Merge pull request #26 from plures/copilot/complete-p2p-sync-ux-conflict-handling (2668073)
