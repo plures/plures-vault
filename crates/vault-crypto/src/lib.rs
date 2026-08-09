@@ -1,5 +1,5 @@
 use argon2::{Argon2, PasswordHash, PasswordHasher, PasswordVerifier};
-use argon2::password_hash::{rand_core::OsRng, SaltString};
+use argon2::password_hash::{rand_core::{OsRng, RngCore}, SaltString};
 use aes_gcm::{Aes256Gcm, Key, Nonce, KeyInit};
 use aes_gcm::aead::{Aead, AeadCore};
 use zeroize::ZeroizeOnDrop;
@@ -130,6 +130,13 @@ impl VaultCrypto {
         String::from_utf8(plaintext)
             .map_err(|_| CryptoError::DecryptionError)
     }
+}
+
+/// Generate a cryptographically random recovery key (32 bytes, base64-encoded).
+pub fn generate_recovery_key() -> String {
+    let mut key = [0u8; 32];
+    RngCore::fill_bytes(&mut OsRng, &mut key);
+    general_purpose::STANDARD.encode(key)
 }
 
 impl Default for VaultCrypto {

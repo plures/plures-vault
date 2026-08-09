@@ -81,6 +81,20 @@ enum Commands {
     Lock,
     /// Sync with other devices (placeholder for GUI)
     Sync,
+    /// Change the master password
+    ChangePassword,
+    /// Recover vault using a recovery key
+    Recover,
+    /// Export vault (encrypted backup)
+    Export {
+        #[arg(short, long)]
+        output: String,
+    },
+    /// Import vault from an encrypted backup
+    Import {
+        #[arg(short, long)]
+        input: String,
+    },
     /// Graph-native secret relationship management
     #[command(subcommand)]
     Graph(GraphCommands),
@@ -179,9 +193,15 @@ async fn main() -> Result<()> {
             }
             
             match vault.init_vault(&name, &password).await {
-                Ok(config) => {
-                    println!("✅ Vault '{}' initialized successfully", config.vault_name);
-                    println!("   Created: {}", config.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
+                Ok(result) => {
+                    println!("✅ Vault '{}' initialized successfully", result.config.vault_name);
+                    println!("   Created: {}", result.config.created_at.format("%Y-%m-%d %H:%M:%S UTC"));
+                    println!();
+                    println!("🔑 RECOVERY KEY (store this in a safe place!):");
+                    println!("   {}", result.recovery_key);
+                    println!();
+                    println!("⚠️  This key is the ONLY way to recover your vault if you forget your master password.");
+                    println!("   It will NOT be shown again.");
                 }
                 Err(e) => {
                     eprintln!("❌ Failed to initialize vault: {}", e);
@@ -401,6 +421,100 @@ async fn main() -> Result<()> {
         Commands::Sync => {
             println!("🔄 Syncing with other devices...");
             println!("💡 Use 'start-sync' to run P2P server, or 'connect-peer' to connect to another device");
+        }
+
+        Commands::ChangePassword => {
+            let current = prompt_password("Enter current master password: ")?;
+            let new_pass = prompt_password("Enter new master password: ")?;
+            let confirm = prompt_password("Confirm new master password: ")?;
+
+            if new_pass != confirm {
+                return Err(anyhow::anyhow!("New passwords don't match"));
+            }
+
+            match vault.change_master_password(&current, &new_pass).await {
+                Ok(config) => {
+                    println!("✅ Master password changed (vault version {})", config.version);
+                }
+                Err(e) => {
+                    eprintln!("❌ Failed to change password: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Commands::Recover => {
+            let recovery_key = prompt_password("Enter recovery key: ")?;
+            let new_pass = prompt_password("Enter new master password: ")?;
+            let confirm = prompt_password("Confirm new master password: ")?;
+
+            if new_pass != confirm {
+                return Err(anyhow::anyhow!("Passwords don't match"));
+            }
+
+            match vault.recover_with_key(&recovery_key, &new_pass).await {
+                Ok(result) => {
+                    println!("✅ Vault recovered and password reset (version {})", result.config.version);
+                    println!();
+                    println!("🔑 NEW RECOVERY KEY (store this in a safe place!):");
+                    println!("   {}", result.recovery_key);
+                    println!();
+                    println!("⚠️  This key is the ONLY way to recover your vault if you forget your master password.");
+                    println!("   It will NOT be shown again.");
+                }
+                Err(e) => {
+                    eprintln!("❌ Recovery failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Commands::Export { output } => {
+            if !vault.is_unlocked() {
+                let password = prompt_password("Enter master password to unlock vault: ")?;
+                vault.unlock_vault(&password).await?;
+            }
+
+            let export_pass = prompt_password("Enter export passphrase: ")?;
+            let confirm = prompt_password("Confirm export passphrase: ")?;
+            if export_pass != confirm {
+                return Err(anyhow::anyhow!("Passphrases don't match"));
+            }
+
+            match vault.export_vault(&export_pass).await {
+                Ok(data) => {
+                    std::fs::write(&output, &data)?;
+                    #[cfg(unix)]
+                    {
+                        use std::os::unix::fs::PermissionsExt;
+                        std::fs::set_permissions(&output, std::fs::Permissions::from_mode(0o600))?;
+                    }
+                    println!("✅ Vault exported to {}", output);
+                }
+                Err(e) => {
+                    eprintln!("❌ Export failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+
+        Commands::Import { input } => {
+            if !vault.is_unlocked() {
+                let password = prompt_password("Enter master password to unlock vault: ")?;
+                vault.unlock_vault(&password).await?;
+            }
+
+            let export_pass = prompt_password("Enter export passphrase: ")?;
+            let data = std::fs::read_to_string(&input)?;
+            match vault.import_vault(&data, &export_pass).await {
+                Ok(count) => {
+                    println!("✅ Imported {} credentials from {}", count, input);
+                }
+                Err(e) => {
+                    eprintln!("❌ Import failed: {}", e);
+                    std::process::exit(1);
+                }
+            }
         }
 
         Commands::Graph(graph_cmd) => {
