@@ -852,8 +852,7 @@ impl VaultManager {
         let plaintext = self
             .crypto
             .decrypt(&export_key, &encrypted)
-            .map_err(|_| VaultError::InvalidMasterPassword)?;
-
+            .map_err(|_| VaultError::StorageError("invalid export passphrase or corrupt export data".into()))?;
         let export: VaultExport = serde_json::from_str(&plaintext)?;
 
         let mut count = 0;
