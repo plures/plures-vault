@@ -1411,8 +1411,19 @@ mod tests {
     #[tokio::test]
     async fn test_change_master_password() {
         let mut vault = init_vault().await;
+        let cred = vault
+            .add_credential(
+                "TestCred".into(),
+                Some("user".into()),
+                "secret123".into(),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+
         vault
-            .add_credential("TestCred".into(), Some("user".into()), "secret123".into(), None, None)
+            .set_credential_metadata(&cred.id, "rotation_test", "metadata_value")
             .await
             .unwrap();
 
@@ -1429,9 +1440,13 @@ mod tests {
 
         // New password should work
         vault.unlock_vault(new_password).await.unwrap();
-        let cred = vault.get_credential("TestCred").await.unwrap().unwrap();
-        assert_eq!(cred.password, "secret123");
-        assert_eq!(cred.username.as_deref(), Some("user"));
+        let fetched = vault.get_credential("TestCred").await.unwrap().unwrap();
+        assert_eq!(fetched.password, "secret123");
+        assert_eq!(fetched.username.as_deref(), Some("user"));
+
+        let meta = vault.get_credential_metadata(&cred.id).await.unwrap();
+        let m = meta.iter().find(|m| m.key == "rotation_test").unwrap();
+        assert_eq!(m.value, "metadata_value");
     }
 
     #[tokio::test]
